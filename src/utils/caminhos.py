@@ -16,6 +16,9 @@ raiz = {
             "document": _raiz / "dados_extraidos" / "conteudo_extraido" / "document.jsonl",
             "assets": {
                 "path": _raiz / "dados_extraidos" / "conteudo_extraido" / "assets"
+            },
+            "debug_visual": {
+                "path": _raiz / "dados_extraidos" / "conteudo_extraido" / "debug_visual"
             }
         },
     },
