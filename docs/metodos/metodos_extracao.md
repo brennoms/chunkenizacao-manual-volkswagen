@@ -327,7 +327,10 @@ Para evitar inferência geométrica prematura na etapa bruta, `shape` é reserva
 | `uri` | Endereço externo, quando aplicável. |
 | `destination` | Destino interno do PDF, quando aplicável. |
 
-`destination` pode conter `page`, `x` e `y`, representando a página e as coordenadas de destino.
+`destination` pode conter `page`, `x` e `y`, representando a página e as coordenadas
+de destino em pontos tipográficos, no referencial do schema (origem no canto superior
+esquerdo). O `y` é convertido usando a altura da página de destino; se a página não
+puder ser resolvida, ele será `null`.
 
 ## 7. Regras de extração
 

@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 
 
 def validar_regras_extracao(output_dir: Path) -> bool:

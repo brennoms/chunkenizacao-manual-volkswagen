@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 
 EXTRACTOR_VERSION = "1.0.0"
 SCHEMA_VERSION = "1.0.0"
@@ -458,7 +458,7 @@ def _extrair_vetores_e_formas_da_pagina(
 
 
 def _extrair_links_da_pagina(
-    page: fitz.Page, page_w: float, page_h: float
+    doc: fitz.Document, page: fitz.Page, page_w: float, page_h: float
 ) -> List[Dict[str, Any]]:
     """Extrai hiperlinks externos e âncoras internas da página."""
     mapa_tipos = {
@@ -482,10 +482,20 @@ def _extrair_links_da_pagina(
         if link_type in ("goto", "named"):
             dest_page = link.get("page")
             to_pt = link.get("to")
+            pagina_destino = (
+                doc[int(dest_page)]
+                if dest_page is not None and 0 <= int(dest_page) < doc.page_count
+                else None
+            )
+            altura_destino = float(pagina_destino.rect.height) if pagina_destino else None
             destination = {
                 "page": (int(dest_page) + 1) if dest_page is not None and dest_page >= 0 else None,
                 "x": round(float(to_pt.x), 2) if to_pt else None,
-                "y": round(float(to_pt.y), 2) if to_pt else None,
+                "y": (
+                    round(altura_destino - float(to_pt.y), 2)
+                    if to_pt and altura_destino is not None
+                    else None
+                ),
             }
 
         xref_link = link.get("xref")
@@ -582,7 +592,7 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
                 )
             )
             elementos_pagina.extend(_extrair_vetores_e_formas_da_pagina(page, page_w, page_h, content_xref))
-            elementos_pagina.extend(_extrair_links_da_pagina(page, page_w, page_h))
+            elementos_pagina.extend(_extrair_links_da_pagina(doc, page, page_w, page_h))
 
             # Atribui ID global único e extraction_order (1..N na página)
             for ordem_ext, elem in enumerate(elementos_pagina, start=1):
