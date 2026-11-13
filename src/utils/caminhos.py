@@ -1,10 +1,8 @@
 from pathlib import Path
-from types import SimpleNamespace
-
 
 _raiz = Path(__file__).parent.parent.parent
 
-_dict = {
+raiz = {
 
     "path": _raiz,
 
@@ -12,6 +10,11 @@ _dict = {
         "path": _raiz / "dados_extraidos",
         "pdf_original": _raiz / "dados_extraidos" / "manual_tecnico_volkswagen.pdf",
         "pdf_original_hash": _raiz / "dados_extraidos" / "manual_tecnico_volkswagen.pdf.sha256",
+        "conteudo_extraido": {
+            "path": _raiz / "dados_extraidos" / "conteudo_extraido",
+            "metadata": _raiz / "dados_extraidos" / "conteudo_extraido" / "metadata.jsonl",
+            "document": _raiz / "dados_extraidos" / "conteudo_extraido" / "document.jsonl"
+        },
     },
 
 }
@@ -25,17 +28,4 @@ def garantir_diretorios(diretorio: dict):
             if '__name__' == '__main__':
                 print(f"Diretório {c} criado com sucesso.")
 
-def para_namespace(valor):
-    if isinstance(valor, dict):
-        return SimpleNamespace(
-            **{
-                chave: para_namespace(conteudo)
-                for chave, conteudo in valor.items()
-            }
-        )
-
-    return valor
-
-
-garantir_diretorios(_dict)
-raiz = para_namespace(_dict)
+garantir_diretorios(raiz)
