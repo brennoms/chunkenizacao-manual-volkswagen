@@ -1,0 +1,1 @@
+URL_MANUAL_TECNICO_VOLKSWAGEN = "https://www.vw.com.br/idhub/content/dam/onehub_pkw/importers/br/literatura-de-bordo/manual-nivus/21B.5B1.NIV.66%20-%20Manual%20de%20instru%C3%A7%C3%B5es%20-%20NIVUS.pdf"
