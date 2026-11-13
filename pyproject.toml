@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chunkenizacao-manual-volkswagen"
+version = "0.1.0"
+description = "Extração e chunkização do manual técnico Volkswagen"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
