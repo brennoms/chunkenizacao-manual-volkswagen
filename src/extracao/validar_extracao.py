@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Set
 
 import pymupdf as fitz  # PyMuPDF
 
@@ -41,7 +41,6 @@ def validar_regras_extracao(output_dir: Path) -> bool:
             qtd_el = len(elementos)
 
             ordens_extracao = []
-            ordens_espaciais = []
 
             for el in elementos:
                 el_id = el.get("id")
@@ -54,7 +53,6 @@ def validar_regras_extracao(output_dir: Path) -> bool:
                 ids_vistos.add(el_id)
 
                 ordens_extracao.append(el.get("extraction_order"))
-                ordens_espaciais.append(el.get("spatial_order"))
 
                 # Verifica bbox normalizado
                 nb = el.get("normalized_bbox", {})
@@ -80,12 +78,10 @@ def validar_regras_extracao(output_dir: Path) -> bool:
                             erros.append(f"Hash divergente em {rel_path}: esperado {c_hash}, calculado {hash_real}")
                         hashes_verificados[c_hash] = rel_path
 
-            # Regra 3: extraction_order e spatial_order de 1..N sem repetição
+            # Regra 3: extraction_order de 1..N sem repetição
             esperado_seq = list(range(1, qtd_el + 1))
             if sorted(ordens_extracao) != esperado_seq:
                 erros.append(f"Página {p_num}: extraction_order inválido.")
-            if sorted(ordens_espaciais) != esperado_seq:
-                erros.append(f"Página {p_num}: spatial_order inválido.")
 
     # Regra 1: 1 registro JSON por página
     if paginas_lidas != page_count_esperado:
@@ -127,7 +123,31 @@ def validar_regras_extracao(output_dir: Path) -> bool:
     return True
 
 
-def gerar_debug_visual(pdf_path: Path, output_dir: Path, paginas_amostra: List[int]) -> None:
+def _perguntar_tipos_elementos() -> Set[str]:
+    tipos_validos = {"text", "image", "shape", "vector", "link"}
+    while True:
+        resposta = input(
+            "Quais tipos deseja observar? "
+            "(text, image, shape, vector, link; separados por vírgula; "
+            "Enter para todos): "
+        ).strip().lower()
+        if not resposta:
+            return tipos_validos
+
+        tipos_selecionados = {tipo.strip() for tipo in resposta.split(",") if tipo.strip()}
+        tipos_invalidos = tipos_selecionados - tipos_validos
+        if not tipos_invalidos and tipos_selecionados:
+            return tipos_selecionados
+
+        print(f"❌ Tipos inválidos: {', '.join(sorted(tipos_invalidos))}.")
+
+
+def gerar_debug_visual(
+    pdf_path: Path,
+    output_dir: Path,
+    paginas_amostra: List[int],
+    tipos_observados: Set[str],
+) -> None:
     """
     Desenha os bounding boxes extraídos sobre as páginas originais do PDF
     e salva como PNG em output_dir/debug_visual/ para inspeção humana.
@@ -141,8 +161,8 @@ def gerar_debug_visual(pdf_path: Path, output_dir: Path, paginas_amostra: List[i
         "text": (0.0, 0.4, 1.0),    # Azul
         "image": (0.0, 0.7, 0.2),   # Verde
         "shape": (1.0, 0.5, 0.0),   # Laranja
-        "vector": (0.9, 0.1, 0.1),  # Vermelho
-        "link": (0.6, 0.0, 0.8),    # Roxo
+        "vector": (0.6, 0.0, 0.8),  # Roxo
+        "link": (0.9, 0.1, 0.1),    # Vermelho
     }
 
     conjunto_amostra = set(paginas_amostra)
@@ -160,6 +180,9 @@ def gerar_debug_visual(pdf_path: Path, output_dir: Path, paginas_amostra: List[i
 
             for el in dados_pag["elements"]:
                 el_type = el["type"]
+                if el_type not in tipos_observados:
+                    continue
+
                 b = el["bbox"]
                 rect = fitz.Rect(b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"])
                 cor = cores_tipo.get(el_type, (0, 0, 0))
@@ -167,15 +190,13 @@ def gerar_debug_visual(pdf_path: Path, output_dir: Path, paginas_amostra: List[i
                 shape_canvas.draw_rect(rect)
                 shape_canvas.finish(color=cor, width=0.8, stroke_opacity=0.85)
 
-                # Anota o spatial_order nos blocos de texto para validar a ordenação
-                if el_type == "text" or el_type == "image" or el_type == "vector":
-                    ordem = str(el["spatial_order"])
-                    shape_canvas.insert_text(
-                        fitz.Point(rect.x0, max(8, rect.y0 - 1)),
-                        f"#{ordem}",
-                        fontsize=6,
-                        color=cor,
-                    )
+                ordem = str(el["extraction_order"])
+                shape_canvas.insert_text(
+                    fitz.Point(rect.x0, max(8, rect.y0 - 1)),
+                    f"#{ordem}",
+                    fontsize=6,
+                    color=cor,
+                )
 
             shape_canvas.commit()
             pix = page.get_pixmap(dpi=150)
@@ -202,4 +223,10 @@ if __name__ == "__main__":
 
         # Escolha páginas variadas: capa (1), índice (2-4), páginas de conteúdo e tabelas (ex: 20, 50, 120)
         paginas_amostra = [1, 2, 6, 9, 12, 15, 18, 22, 32, 33, 35]
-        gerar_debug_visual(pdf_path, Path(diretorio_saida), paginas_amostra=paginas_amostra)
+        tipos_observados = _perguntar_tipos_elementos()
+        gerar_debug_visual(
+            pdf_path,
+            Path(diretorio_saida),
+            paginas_amostra=paginas_amostra,
+            tipos_observados=tipos_observados,
+        )

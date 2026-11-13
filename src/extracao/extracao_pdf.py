@@ -120,23 +120,6 @@ def _criar_source(
     }
 
 
-def _atribuir_spatial_order(elementos: List[Dict[str, Any]], tolerancia_y: float = 5.0) -> None:
-    """
-    Calcula o spatial_order ordenando elementos de cima para baixo (Y) e,
-    para elementos na mesma faixa horizontal (tolerância em pt), da esquerda para a direita (X).
-    """
-    indices_ordenados = sorted(
-        range(len(elementos)),
-        key=lambda i: (
-            round(elementos[i]["bbox"]["y"] / tolerancia_y),
-            elementos[i]["bbox"]["x"],
-            elementos[i]["extraction_order"],
-        ),
-    )
-    for ordem_espacial, idx_original in enumerate(indices_ordenados, start=1):
-        elementos[idx_original]["spatial_order"] = ordem_espacial
-
-
 # =====================================================================
 # Extratores por Tipo de Elemento
 # =====================================================================
@@ -599,13 +582,9 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
                 contador_global_elementos += 1
                 elem["id"] = f"el_{contador_global_elementos:06d}"
                 elem["extraction_order"] = ordem_ext
-                elem["spatial_order"] = 0  # Será preenchido logo a seguir
-
-            # Calcula spatial_order (1..N na página) e reordena as chaves do dicionário para legibilidade
-            _atribuir_spatial_order(elementos_pagina)
 
             chaves_comuns = [
-                "id", "type", "extraction_order", "spatial_order",
+                "id", "type", "extraction_order",
                 "bbox", "normalized_bbox", "source_id", "source",
                 "extraction_method", "rotation", "transform", "parent_id",
             ]

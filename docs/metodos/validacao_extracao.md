@@ -22,7 +22,7 @@ O validador percorre sequencialmente os arquivos de saída e classifica qualquer
 | **Completude de Páginas** | Documento | O número total de linhas em `document.jsonl` deve ser estritamente igual ao atributo `page_count` de `metadata.json`. | Erro |
 | **Sequencialidade de Páginas** | Documento | O atributo `page` da linha $N$ no arquivo `.jsonl` deve ser igual a $N$ (iniciando em 1, sem saltos ou duplicatas). | Erro |
 | **Unicidade Global de IDs** | Documento | O atributo `id` (`el_000001`, ...) não pode se repetir em nenhum outro elemento de qualquer página do documento. | Erro |
-| **Permutação de Ordenação** | Página | Em uma página com $K$ elementos, os conjuntos de valores de `extraction_order` e `spatial_order` devem formar exatamente a sequência $\{1, 2, \dots, K\}$. | Erro |
+| **Permutação de Ordenação** | Página | Em uma página com $K$ elementos, os valores de `extraction_order` devem formar exatamente a sequência $\{1, 2, \dots, K\}$. | Erro |
 | **Dimensões Positivas** | Elemento | Os atributos `width` e `height` de `bbox` e `normalized_bbox` devem ser maiores ou iguais a zero ($\ge 0$). | Erro |
 | **Limites Normalizados** | Elemento | As coordenadas `x` e `y` de `normalized_bbox` devem estar contidas no intervalo tolerado $[-0.5, 1.5]$ (considerando margens de sangria do PDF). | Aviso |
 | **Existência de Binários** | Imagem | Todo elemento com `type: "image"` deve apontar em `path` para um arquivo existente em `assets/` com tamanho maior que zero ($> 0$ bytes). | Erro |
@@ -41,11 +41,11 @@ Os artefatos de inspeção são salvos em `documento/debug_visual/debug_pagina_X
 
 | Tipo (`type`) | Cor da Caixa (`bbox`) | Anotação Adicional |
 |---|---|---|
-| `text` | Azul | Rótulo `#N` no canto superior esquerdo indicando o `spatial_order`. |
-| `image` | Verde | — |
-| `shape` | Laranja | — |
-| `vector` | Vermelho | — |
-| `link` | Roxo | — |
+| `text` | Azul | Rótulo `#N` no canto superior esquerdo indicando o `extraction_order`. |
+| `image` | Verde | Rótulo `#N` no canto superior esquerdo indicando o `extraction_order`. |
+| `shape` | Laranja | Rótulo `#N` no canto superior esquerdo indicando o `extraction_order`. |
+| `vector` | Roxo | Rótulo `#N` no canto superior esquerdo indicando o `extraction_order`. |
+| `link` | Vermelho | Rótulo `#N` no canto superior esquerdo indicando o `extraction_order`. |
 
 ### 3.2. Critérios de Homologação Visual
 
@@ -53,7 +53,7 @@ Durante a inspeção das imagens geradas em `debug_visual/` e dos arquivos em `a
 
 1. **Alinhamento de Caixas:** os retângulos coloridos devem envolver com precisão os textos, imagens e formas gráficas da página, sem deslocamento vertical ou horizontal.
 2. **Coesão de Parágrafos:** blocos de texto contíguos devem estar agrupados sob um único retângulo azul, sem fusão indevida entre colunas paralelas.
-3. **Fluxo de Ordenação Espacial (`#N`):** a numeração `#1, #2, ..., #N` nos blocos de texto deve progredir de cima para baixo e, em elementos alinhados horizontalmente, da esquerda para a direita.
+3. **Ordem de Extração (`#N`):** a numeração `#1, #2, ..., #N` indica a ordem em que os elementos foram encontrados pelo extrator.
 4. **Preservação de Canal Alfa (`SMask`):** ícones e pictogramas extraídos na pasta `assets/` devem apresentar fundo transparente quando aplicável, sem artefatos de fundo preto sólido.
 
 ---
@@ -64,3 +64,9 @@ Para executar a validação completa e gerar as páginas de inspeção visual:
 
 ```bash
 python src/validar_extracao.py
+```
+
+Após a validação das regras, o script pergunta quais tipos de elementos devem
+ser desenhados no debug visual. Informe os tipos separados por vírgula
+(`text`, `image`, `shape`, `vector` e `link`), ou pressione `Enter` para
+observar todos.

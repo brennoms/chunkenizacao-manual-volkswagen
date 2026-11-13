@@ -115,7 +115,6 @@ Cada elemento possui atributos comuns e atributos específicos de seu tipo.
   "id": "el_000001",
   "type": "text",
   "extraction_order": 1,
-  "spatial_order": 1,
   "bbox": {
     "x": 72,
     "y": 50,
@@ -143,7 +142,6 @@ Cada elemento possui atributos comuns e atributos específicos de seu tipo.
 | `id` | Identificador único da ocorrência no documento. Formato `el_000001`. |
 | `type` | Tipo do elemento: `text`, `image`, `vector`, `shape` ou `link`. |
 | `extraction_order` | Ordem em que o extrator encontrou o elemento na página. |
-| `spatial_order` | Ordem espacial calculada pelas coordenadas. |
 | `bbox` | Posição e dimensões do elemento em pontos tipográficos. |
 | `normalized_bbox` | Mesmas coordenadas normalizadas entre 0 e 1, em relação à página. |
 | `source_id` | Identificador da origem do elemento no PDF, quando disponível. |
@@ -155,7 +153,7 @@ Cada elemento possui atributos comuns e atributos específicos de seu tipo.
 
 **Coordenadas:** a origem é o canto superior esquerdo; X cresce para a direita e Y cresce para baixo. `bbox` utiliza pontos tipográficos. `normalized_bbox` divide X e largura pela largura da página e Y e altura pela altura da página.
 
-**Ordenação:** `extraction_order` registra a sequência de extração. `spatial_order` ordena os elementos de cima para baixo e, em posições verticais próximas, da esquerda para a direita. Nenhum dos dois representa a ordem definitiva de leitura.
+**Ordenação:** `extraction_order` registra a sequência em que o extrator encontrou os elementos na página. Essa ordem não representa necessariamente a ordem definitiva de leitura.
 
 ### 5.2. Origem — source
 
@@ -336,7 +334,7 @@ puder ser resolvida, ele será `null`.
 
 1. Cada página deve gerar exatamente um registro JSON no JSONL.
 2. Cada ocorrência deve possuir um `id` único em todo o documento.
-3. `extraction_order` e `spatial_order` devem começar em 1 e não se repetir dentro da página.
+3. `extraction_order` deve começar em 1 e não se repetir dentro da página.
 4. Textos contíguos devem ser agrupados em nível de frase ou parágrafo, conforme os blocos de texto fornecidos pelo extrator.
 5. Os recursos binários devem ser armazenados uma única vez quando seus bytes forem idênticos.
 6. Quando uma imagem possuir máscara de opacidade (`SMask`), ela deve ser recomposta antes do armazenamento e do cálculo do hash.
