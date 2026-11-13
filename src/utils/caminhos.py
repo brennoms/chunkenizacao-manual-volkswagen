@@ -13,7 +13,10 @@ raiz = {
         "conteudo_extraido": {
             "path": _raiz / "dados_extraidos" / "conteudo_extraido",
             "metadata": _raiz / "dados_extraidos" / "conteudo_extraido" / "metadata.jsonl",
-            "document": _raiz / "dados_extraidos" / "conteudo_extraido" / "document.jsonl"
+            "document": _raiz / "dados_extraidos" / "conteudo_extraido" / "document.jsonl",
+            "assets": {
+                "path": _raiz / "dados_extraidos" / "conteudo_extraido" / "assets"
+            }
         },
     },
 
