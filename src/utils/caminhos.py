@@ -36,6 +36,7 @@ raiz = {
             "path": _raiz / "dados_preparados" / "debug_visual",
             "fase1_removidos": _raiz / "dados_preparados" / "debug_visual" / "debug_fase1_removidos.pdf",
             "fase2_icones": _raiz / "dados_preparados" / "debug_visual" / "debug_fase2_icones.pdf",
+            "fase3_ordem_leitura": _raiz / "dados_preparados" / "debug_visual" / "debug_fase3_ordem_leitura.pdf"
         }
     }
 

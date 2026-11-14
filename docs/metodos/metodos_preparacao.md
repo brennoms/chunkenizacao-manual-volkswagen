@@ -44,6 +44,9 @@ Agrupa primitivas gráficas sobrepostas que formam um único símbolo visual e a
    - **Inline (`inline`):** ícones contidos na faixa vertical de uma linha de texto são convertidos na marcação `<icon:icon_XXXX>` diretamente dentro da string de texto do parágrafo.
    - **Bloco/Coluna (`standalone`):** ícones isolados (como em colunas de tabelas de luzes de advertência ou cabeçalhos de alerta) são vinculados diretamente à estrutura pai (célula da tabela ou caixa de alerta).
 
+#### Homologação Visual da Fase 2
+Geração do arquivo `debug_visual/debug_fase2_icones.pdf`, demarcando cada ícone consolidado com uma caixa única e seu respectivo `icon_id` compartilhado.
+
 ---
 
 ### 2.3. Fase 3 — Reconstrução Semântica, Ordem de Leitura, Alertas, Tabelas e Imagens
@@ -68,7 +71,7 @@ Cada título atualiza a pilha de contexto ativa, preenchendo o atributo `section
 Quando o último bloco textual de uma coluna ou página termina sem pontuação final (`.`, `!`, `?`, `:`) ou com palavra hifenizada, ele é fundido ao primeiro bloco textual compatível da coluna ou página seguinte, registrando o intervalo `[page_start, page_end]`.
 
 #### 4. Caixas de Alerta (`alert_box`) e Vínculo de Escopo
-- **Delimilitação:** inicia em cabeçalhos destacados por retângulo colorido contendo `PERIGO`, `ATENÇÃO`, `CUIDADO` ou `NOTA` (associados ao seu `icon_id`), ou em blocos iniciados por ícones de nota informativa/ambiental. Absorve todos os parágrafos e itens de lista subsequentes (inclusive através de quebras de coluna ou página) até atingir a linha horizontal delimitadora de fechamento (`shape_type == "line"`).
+- **Delimitação:** inicia em cabeçalhos destacados por retângulo colorido contendo `PERIGO`, `ATENÇÃO`, `CUIDADO` ou `NOTA` (associados ao seu `icon_id`), ou em blocos iniciados por ícones de nota informativa/ambiental. Absorve todos os parágrafos e itens de lista subsequentes (inclusive através de quebras de coluna ou página) até atingir a linha horizontal delimitadora de fechamento (`shape_type == "line"`).
 - **Vínculo de Referência (`alert_scope` e `refers_to_ids`):**
   - `chapter_intro`: quando o alerta está situado sob o tópico `"Introdução ao tema"`, vinculando-se ao ID da seção principal.
   - `local_topic`: quando situado no corpo de um procedimento específico, vinculando-se ao ID do subtítulo ou bloco de instruções imediatamente anterior.
@@ -83,6 +86,11 @@ Cada elemento de imagem recebe:
 - `caption`: texto da legenda associada (ex.: `"Fig. 20 ..."`).
 - `legend_items`: lista ordenada dos itens explicativos numerados associados à figura (`"Legenda para → Fig. X"`), com os números de chamada já concatenados ao texto.
 - `description`: inicializado como `null` para preenchimento posterior via modelo multimodal ou OCR.
+
+#### Homologação Visual da Fase 3 (Grafo de Ordem de Leitura)
+Antes do descarte final das coordenadas geométricas, é gerado o arquivo `debug_visual/debug_fase3_ordem_leitura.pdf` sobre o documento original:
+1. **Caixas Semânticas:** cada unidade consolidada (`heading`, `paragraph`, `list`, `alert_box`, `table`, `image`) é envolvida por um retângulo colorido conforme seu tipo semântico e identificada com seu número de ordem (`#reading_order`).
+2. **Trajetória Contínua de Leitura:** é desenhada uma linha direcionada contínua (vetor com seta/marcador de fluxo) partindo do ponto central do 1º elemento (`reading_order = 1` da página) para o 2º elemento, do 2º para o 3º, e assim sucessivamente até o último elemento da página, permitindo inspecionar visualmente a transição entre títulos de largura total, coluna esquerda e coluna direita.
 
 ---
 
@@ -101,7 +109,8 @@ documento_preparado/
 │       └── ...
 └── debug_visual/
     ├── debug_fase1_removidos.pdf
-    └── debug_fase2_icones.pdf
+    ├── debug_fase2_icones.pdf
+    └── debug_fase3_ordem_leitura.pdf
 
 ```
 
