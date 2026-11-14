@@ -2,7 +2,8 @@
 
 Este documento apresenta, de forma resumida, os métodos e procedimentos
 utilizados para baixar os arquivos e preparar seu conteúdo. A implementação
-desse processo está disponível em [src/extracao.py](../../src/extracao.py).
+Esse processo está disponível em
+[src/extracao/extracao_pdf.py](../../src/extracao/extracao_pdf.py).
 
 # Download do Manual Técnico da Volkswagen
 
@@ -56,7 +57,7 @@ conteudo_extraido/
   "creator": null,
   "producer": null,
   "extraction_date": "2026-11-13T17:00:00-03:00",
-  "extractor_version": "1.0.0",
+  "extractor_version": "1.1.0",
   "schema_version": "1.0.0"
 }
 
@@ -216,7 +217,16 @@ O objeto `color` contém:
 
 Valores de `style`: `bold`, `italic`, `underline`, `strike`, `superscript`, `subscript` e `unknown`.
 
-Os textos devem ser extraídos agrupados em blocos contíguos (frases ou parágrafos fornecidos nativamente pela estrutura de blocos do extrator), evitando a fragmentação em caracteres ou palavras isoladas. Caso um mesmo parágrafo possua variações internas de estilo ou fonte, registram-se as propriedades predominantes no bloco.
+Os textos são agrupados em blocos contíguos por heurísticas de proximidade
+vertical e horizontal. Linhas horizontais de tabelas e quadros funcionam como
+barreiras, evitando a união de conteúdos de células diferentes. Em um bloco
+com variações internas de estilo ou fonte, registram-se as propriedades
+predominantes; um estilo só é registrado quando cobre pelo menos 50% dos
+caracteres ponderados do bloco.
+
+Caracteres da Private Use Area usados pelas fontes proprietárias da Volkswagen
+são normalizados para símbolos legíveis. O extrator também converte alguns
+sobrescritos de ordinal, como `o`/`a` após números ou `N`, para `º`/`ª`.
 
 ### 6.2. Imagem — type: image
 
@@ -244,7 +254,10 @@ Os textos devem ser extraídos agrupados em blocos contíguos (frases ou parágr
 
 O `id` identifica cada ocorrência da imagem; o `asset_id` identifica o arquivo armazenado. Se uma imagem aparecer em várias páginas, cada ocorrência terá seu próprio `id`, mas compartilhará o mesmo `asset_id`. A referência ao objeto interno do PDF (`xref` e eventual `smask_xref`) fica registrada dentro do objeto comum `source`.
 
-Quando uma imagem possuir máscara de transparência (`SMask`) separada no PDF, o extrator deve recompor o canal alfa antes de salvar o arquivo em `assets/` e calcular o `content_hash` sobre o resultado recomposto, garantindo que ícones e gráficos preservem a transparência original.
+Quando uma imagem possuir máscara de transparência (`SMask`) separada no
+PDF, o extrator tenta recompor o canal alfa e salvá-la como PNG. O
+`content_hash` é calculado sobre os bytes efetivamente armazenados, e imagens
+com bytes idênticos compartilham o mesmo `asset_id`.
 
 ### 6.3. Vetor — type: vector
 
@@ -272,7 +285,10 @@ Quando uma imagem possuir máscara de transparência (`SMask`) separada no PDF, 
 | `stroke_color` | Cor do contorno. |
 | `stroke_width` | Espessura do contorno em pt. |
 
-`geometry` deve preservar os comandos e as coordenadas disponibilizados pelo extrator (como operadores de linha, curvas de Bézier e subcaminhos complexos), sem interpretação semântica.
+`geometry.commands` preserva os comandos e coordenadas disponibilizados pelo
+PyMuPDF. Os operadores conhecidos são serializados como `l` (linha), `re`
+(retângulo), `qu` (quadrilátero) e `c` (curva); outros comandos mantêm o
+operador e sua representação bruta.
 
 ### 6.4. Forma — type: shape
 
@@ -305,7 +321,10 @@ Quando uma imagem possuir máscara de transparência (`SMask`) separada no PDF, 
 | `stroke_color` | Cor do contorno. |
 | `stroke_width` | Espessura do contorno em pt. |
 
-Para evitar inferência geométrica prematura na etapa bruta, `shape` é reservado às primitivas declaradas explicitamente pelo fluxo do PDF ou pelo extrator (como retângulos e segmentos de linha simples). Construções gráficas compostas por múltiplos segmentos ou curvas devem ser registradas diretamente como `vector`.
+Para evitar inferência geométrica prematura na etapa bruta, `shape` é
+reservado a desenhos com uma única primitiva explícita: `re` é classificado
+como `rectangle` e `l` como `line`. Construções com múltiplos segmentos,
+quadriláteros ou curvas são registradas como `vector`.
 
 ### 6.5. Link — type: link
 
@@ -335,14 +354,16 @@ puder ser resolvida, ele será `null`.
 1. Cada página deve gerar exatamente um registro JSON no JSONL.
 2. Cada ocorrência deve possuir um `id` único em todo o documento.
 3. `extraction_order` deve começar em 1 e não se repetir dentro da página.
-4. Textos contíguos devem ser agrupados em nível de frase ou parágrafo, conforme os blocos de texto fornecidos pelo extrator.
+4. Textos contíguos devem ser agrupados em blocos por proximidade e pelas barreiras geométricas identificadas.
 5. Os recursos binários devem ser armazenados uma única vez quando seus bytes forem idênticos.
-6. Quando uma imagem possuir máscara de opacidade (`SMask`), ela deve ser recomposta antes do armazenamento e do cálculo do hash.
+6. Quando possível, uma imagem com máscara de opacidade (`SMask`) deve ser recomposta antes do armazenamento; o hash deve sempre ser calculado sobre os bytes armazenados.
 7. As informações indisponíveis devem receber `null`, quando permitido.
 8. Não descartar elementos por serem repetidos, decorativos ou aparentemente irrelevantes.
 9. Preservar os dados originais de geometria, fonte, cor e transformação sempre que disponíveis.
 10. Não substituir a extração nativa por OCR quando o texto nativo estiver disponível; OCR deve complementar conteúdos que não possam ser extraídos nativamente.
 11. Elementos vetoriais e formas devem preservar seus dados geométricos, mesmo quando não for possível classificá-los.
+
+12. Para imagens grandes que ocupem pelo menos 35% da área da página e não possuam texto nativo sobreposto, o extrator pode adicionar textos complementares com `extraction_method: "ocr"`. O OCR tenta RapidOCR e, como alternativa, o OCR nativo do PyMuPDF, quando disponíveis.
 
 ## 8. Limites desta etapa
 

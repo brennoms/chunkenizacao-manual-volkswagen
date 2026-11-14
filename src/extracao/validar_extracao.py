@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
-from typing import List, Set
+from typing import Optional, Set
 
 import pymupdf as fitz  # PyMuPDF
 
@@ -142,19 +142,23 @@ def _perguntar_tipos_elementos() -> Set[str]:
         print(f"❌ Tipos inválidos: {', '.join(sorted(tipos_invalidos))}.")
 
 
-def gerar_debug_visual(
+def gerar_debug_visual_pdf(
     pdf_path: Path,
     output_dir: Path,
-    paginas_amostra: List[int],
     tipos_observados: Set[str],
-) -> None:
+    pdf_saida_path: Optional[Path] = None,
+) -> Path:
     """
-    Desenha os bounding boxes extraídos sobre as páginas originais do PDF
-    e salva como PNG em output_dir/debug_visual/ para inspeção humana.
+    Desenha os bounding boxes extraídos diretamente em todas as páginas do PDF
+    e salva um novo arquivo PDF completo com as marcações vetoriais.
     """
     debug_dir = output_dir / "debug_visual"
     debug_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = output_dir / "document.jsonl"
+
+    if pdf_saida_path is None:
+        sufixo_tipos = "_".join(sorted(tipos_observados)) if len(tipos_observados) < 5 else "completo"
+        pdf_saida_path = debug_dir / f"debug_documento_{sufixo_tipos}.pdf"
 
     # Cores RGB (0..1) por tipo de elemento
     cores_tipo = {
@@ -165,18 +169,16 @@ def gerar_debug_visual(
         "link": (0.9, 0.1, 0.1),    # Vermelho
     }
 
-    conjunto_amostra = set(paginas_amostra)
     doc = fitz.open(pdf_path)
+    total_caixas_desenhadas = 0
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for linha in f:
             dados_pag = json.loads(linha)
             p_num = dados_pag["page"]
-            if p_num not in conjunto_amostra:
-                continue
-
             page = doc[p_num - 1]
             shape_canvas = page.new_shape()
+            desenhou_na_pagina = False
 
             for el in dados_pag["elements"]:
                 el_type = el["type"]
@@ -188,45 +190,44 @@ def gerar_debug_visual(
                 cor = cores_tipo.get(el_type, (0, 0, 0))
 
                 shape_canvas.draw_rect(rect)
-                shape_canvas.finish(color=cor, width=0.8, stroke_opacity=0.85)
+                shape_canvas.finish(color=cor, width=0.6, stroke_opacity=0.85)
 
                 ordem = str(el["extraction_order"])
                 shape_canvas.insert_text(
-                    fitz.Point(rect.x0, max(8, rect.y0 - 1)),
+                    fitz.Point(rect.x0, max(6, rect.y0 - 1)),
                     f"#{ordem}",
-                    fontsize=6,
+                    fontsize=5,
                     color=cor,
                 )
+                desenhou_na_pagina = True
+                total_caixas_desenhadas += 1
 
-            shape_canvas.commit()
-            pix = page.get_pixmap(dpi=150)
-            caminho_img = debug_dir / f"debug_pagina_{p_num:03d}.png"
-            pix.save(str(caminho_img))
-            print(f"🖼️  Imagem de debug gerada: {caminho_img}")
+            if desenhou_na_pagina:
+                shape_canvas.commit()
 
+    # Salva o PDF anotado com compressão de fluxos (deflate) e limpeza de objetos (garbage=3)
+    doc.save(str(pdf_saida_path), garbage=3, deflate=True)
     doc.close()
+
+    print(
+        f"📄 PDF de debug visual gerado com sucesso!\n"
+        f" - Elementos demarcados: {total_caixas_desenhadas}\n"
+        f" - Arquivo salvo em    : {pdf_saida_path}"
+    )
+    return pdf_saida_path
 
 
 if __name__ == "__main__":
     from utils.caminhos import raiz
 
     pdf_path = raiz["dados_extraidos"]["pdf_original"]
-    diretorio_saida = raiz["dados_extraidos"]["conteudo_extraido"]["path"]
+    diretorio_saida = Path(raiz["dados_extraidos"]["conteudo_extraido"]["path"])
 
-    ok = validar_regras_extracao(Path(diretorio_saida))
+    ok = validar_regras_extracao(diretorio_saida)
     if ok:
-        
-        debug_dir = raiz["dados_extraidos"]["conteudo_extraido"]["debug_visual"]["path"]
-        if debug_dir.exists():
-            for f in debug_dir.glob("debug_pagina_*.png"):
-                f.unlink()
-
-        # Escolha páginas variadas: capa (1), índice (2-4), páginas de conteúdo e tabelas (ex: 20, 50, 120)
-        paginas_amostra = [1, 2, 6, 9, 12, 15, 18, 22, 32, 33, 35]
         tipos_observados = _perguntar_tipos_elementos()
-        gerar_debug_visual(
-            pdf_path,
-            Path(diretorio_saida),
-            paginas_amostra=paginas_amostra,
+        gerar_debug_visual_pdf(
+            pdf_path=Path(pdf_path),
+            output_dir=diretorio_saida,
             tipos_observados=tipos_observados,
         )

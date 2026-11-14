@@ -1,13 +1,14 @@
 # Validação da Extração Bruta
 
-Este documento descreve os procedimentos de verificação utilizados para garantir que os artefatos gerados pela extração (`metadata.json`, `document.jsonl` e `assets/`) cumpram integralmente o modelo de dados e as regras de integridade estabelecidas. A implementação está disponível em [src/validar_extracao.py](../../src/validar_extracao.py).
+Este documento descreve os procedimentos de verificação utilizados para garantir que os artefatos gerados pela extração (`metadata.json`, `document.jsonl` e `assets/`) cumpram integralmente o modelo de dados e as regras de integridade estabelecidas. A implementação está disponível em
+[src/extracao/validar_extracao.py](../../src/extracao/validar_extracao.py).
 
 ## 1. Objetivo
 
 Assegurar a conformidade estrutural, matemática e posicional dos dados extraídos antes das etapas de análise semântica, dividindo a verificação em duas frentes complementares:
 
 1. **Validação Automatizada de Invariantes:** checagem determinística de todas as páginas, elementos e arquivos binários.
-2. **Inspeção Visual por Sobreposição (*Visual Debugging*):** verificação amostral do alinhamento geométrico das coordenadas extraídas contra a renderização original do PDF.
+2. **Inspeção Visual por Sobreposição (*Visual Debugging*):** verificação do alinhamento geométrico das coordenadas extraídas sobre todas as páginas do PDF original.
 
 ---
 
@@ -23,7 +24,7 @@ O validador percorre sequencialmente os arquivos de saída e classifica qualquer
 | **Sequencialidade de Páginas** | Documento | O atributo `page` da linha $N$ no arquivo `.jsonl` deve ser igual a $N$ (iniciando em 1, sem saltos ou duplicatas). | Erro |
 | **Unicidade Global de IDs** | Documento | O atributo `id` (`el_000001`, ...) não pode se repetir em nenhum outro elemento de qualquer página do documento. | Erro |
 | **Permutação de Ordenação** | Página | Em uma página com $K$ elementos, os valores de `extraction_order` devem formar exatamente a sequência $\{1, 2, \dots, K\}$. | Erro |
-| **Dimensões Positivas** | Elemento | Os atributos `width` e `height` de `bbox` e `normalized_bbox` devem ser maiores ou iguais a zero ($\ge 0$). | Erro |
+| **Dimensões Normalizadas** | Elemento | Os atributos `width` e `height` de `normalized_bbox` devem ser maiores ou iguais a zero ($\ge 0$). | Erro |
 | **Limites Normalizados** | Elemento | As coordenadas `x` e `y` de `normalized_bbox` devem estar contidas no intervalo tolerado $[-0.5, 1.5]$ (considerando margens de sangria do PDF). | Aviso |
 | **Existência de Binários** | Imagem | Todo elemento com `type: "image"` deve apontar em `path` para um arquivo existente em `assets/` com tamanho maior que zero ($> 0$ bytes). | Erro |
 | **Integridade Criptográfica** | Imagem | O hash SHA-256 calculado sobre os bytes do arquivo físico em `assets/` deve ser idêntico ao campo `content_hash` do elemento. | Erro |
@@ -33,11 +34,19 @@ O validador percorre sequencialmente os arquivos de saída e classifica qualquer
 
 ## 3. Inspeção Visual (*Visual Debugging*)
 
-A validação matemática não detecta desvios sistemáticos de referencial (ex.: inversão do eixo Y ou falha na recomposição de transparência visual). Para validar a fidelidade espacial, o script renderiza páginas de amostra do PDF original (150 DPI) e desenha sobre elas as caixas delimitadoras (`bbox`) extraídas do `document.jsonl`.
+A validação matemática não detecta desvios sistemáticos de referencial (ex.:
+inversão do eixo Y). Para validar a fidelidade espacial, o script abre o PDF
+original e desenha sobre todas as páginas as caixas delimitadoras (`bbox`)
+extraídas do `document.jsonl`. O resultado é salvo como um novo PDF com
+marcações vetoriais, sem renderizar páginas PNG intermediárias.
 
 ### 3.1. Codificação Visual
 
-Os artefatos de inspeção são salvos em `documento/debug_visual/debug_pagina_XXX.png` utilizando o seguinte padrão cromático:
+Os artefatos de inspeção são salvos em
+`conteudo_extraido/debug_visual/debug_documento_<tipos>.pdf`. Quando todos os
+tipos são selecionados, o sufixo é `completo`; caso contrário, os tipos são
+listados em ordem alfabética, separados por sublinhado. O PDF utiliza o
+seguinte padrão cromático:
 
 | Tipo (`type`) | Cor da Caixa (`bbox`) | Anotação Adicional |
 |---|---|---|
@@ -49,9 +58,10 @@ Os artefatos de inspeção são salvos em `documento/debug_visual/debug_pagina_X
 
 ### 3.2. Critérios de Homologação Visual
 
-Durante a inspeção das imagens geradas em `debug_visual/` e dos arquivos em `assets/`, devem ser confirmados quatro pontos:
+Durante a inspeção do PDF gerado em `debug_visual/` e dos arquivos em
+`assets/`, devem ser confirmados quatro pontos:
 
-1. **Alinhamento de Caixas:** os retângulos coloridos devem envolver com precisão os textos, imagens e formas gráficas da página, sem deslocamento vertical ou horizontal.
+1. **Alinhamento de Caixas:** os retângulos coloridos devem envolver com precisão os textos, imagens e formas gráficas de cada página, sem deslocamento vertical ou horizontal.
 2. **Coesão de Parágrafos:** blocos de texto contíguos devem estar agrupados sob um único retângulo azul, sem fusão indevida entre colunas paralelas.
 3. **Ordem de Extração (`#N`):** a numeração `#1, #2, ..., #N` indica a ordem em que os elementos foram encontrados pelo extrator.
 4. **Preservação de Canal Alfa (`SMask`):** ícones e pictogramas extraídos na pasta `assets/` devem apresentar fundo transparente quando aplicável, sem artefatos de fundo preto sólido.
@@ -60,13 +70,14 @@ Durante a inspeção das imagens geradas em `debug_visual/` e dos arquivos em `a
 
 ## 4. Execução
 
-Para executar a validação completa e gerar as páginas de inspeção visual:
+Para executar a validação completa e gerar o PDF de inspeção visual:
 
 ```bash
-python src/validar_extracao.py
+python src/extracao/validar_extracao.py
 ```
 
-Após a validação das regras, o script pergunta quais tipos de elementos devem
-ser desenhados no debug visual. Informe os tipos separados por vírgula
-(`text`, `image`, `shape`, `vector` e `link`), ou pressione `Enter` para
-observar todos.
+Se a validação for aprovada, o script pergunta quais tipos de elementos devem
+ser desenhados no PDF. Informe os tipos separados por vírgula (`text`,
+`image`, `shape`, `vector` e `link`), ou pressione `Enter` para observar todos.
+O arquivo de saída padrão é
+`<diretorio_de_saida>/debug_visual/debug_documento_<tipos>.pdf`.
