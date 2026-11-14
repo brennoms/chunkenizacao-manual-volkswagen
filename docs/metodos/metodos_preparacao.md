@@ -82,10 +82,21 @@ Gradeamento formado pela interseção de fios horizontais e verticais (`shape`).
 
 #### 6. Estruturação de Imagens e Legendas (`image`)
 Cada elemento de imagem recebe:
+- `id_image`: número identificador da imagem, utilizado como chave no documento JSON de descrições.
 - `image_path`: caminho relativo do arquivo principal em `assets/`.
 - `caption`: texto da legenda associada (ex.: `"Fig. 20 ..."`).
 - `legend_items`: lista ordenada dos itens explicativos numerados associados à figura (`"Legenda para → Fig. X"`), com os números de chamada já concatenados ao texto.
-- `description`: inicializado como `null` para preenchimento posterior via modelo multimodal ou OCR.
+- `description`: descrição da imagem obtida a partir de um documento JSON de descrições, no qual a chave é o número da imagem (`id_image`) e o valor é a descrição correspondente.
+
+O documento JSON de descrições deve seguir o formato:
+
+```json
+{
+  "10": "Descrição da imagem do instrumento combinado analógico no painel de instrumentos."
+}
+```
+
+Durante a preparação, o valor de `id_image` é utilizado para localizar a descrição correspondente nesse documento e preencher o campo `description`.
 
 #### Homologação Visual da Fase 3 (Grafo de Ordem de Leitura)
 Antes do descarte final das coordenadas geométricas, é gerado o arquivo `debug_visual/debug_fase3_ordem_leitura.pdf` sobre o documento original:
@@ -99,6 +110,7 @@ Antes do descarte final das coordenadas geométricas, é gerado o arquivo `debug
 ```text
 documento_preparado/
 ├── document_preparado.jsonl
+├── image_descriptions.json
 ├── icons_catalog.json
 ├── assets/
 │   ├── asset_000001.jpeg
@@ -259,6 +271,7 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
   "id": "blk_000124",
   "reading_order": 124,
   "type": "image",
+  "id_image": 10,
   "page_start": 17,
   "page_end": 18,
   "section_path": ["Informações ao condutor", "Instrumento combinado", "Instrumento combinado analógico"],
@@ -267,7 +280,7 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
   "image_path": "assets/asset_000010.png",
   "figure_label": "Fig. 10",
   "caption": "Fig. 10 Instrumento combinado analógico no painel de instrumentos.",
-  "description": null,
+  "description": "Descrição da imagem do instrumento combinado analógico no painel de instrumentos.",
   "legend_items": [
     "1. Tacômetro (conta-giros) (rotações x 1000 por minuto do motor em funcionamento) → Página 19.",
     "2. Botão de ajuste do relógio <icon:icon_0013> → Página 25."
