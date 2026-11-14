@@ -9,10 +9,29 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pymupdf as fitz  # PyMuPDF
 
-from ..utils.funcoes import calcular_hash_sha256
+from utils.funcoes import calcular_hash_sha256
 
-EXTRACTOR_VERSION = "1.0.0"
+EXTRACTOR_VERSION = "1.1.0"
 SCHEMA_VERSION = "1.0.0"
+
+# Mapeamento de glifos da Private Use Area (PUA) das fontes proprietárias VW
+MAPA_PUA_VW = {
+    "\uf0a3": "▸",       # Continua na página seguinte
+    "\uf0cc": "▪",       # Fim de um trecho de texto
+    "\uf0e4": "⚠️",      # Símbolo de atenção / consultar início do capítulo
+    "\uf03a": "[MAX]",   # Desembaçamento máximo Climatronic
+    "\uf05c": "[DEF]",   # Desembaçamento para-brisa
+    "\uf05d": "[REAR]",  # Desembaçador traseiro
+    "\uf04f": "[REC]",   # Recirculação de ar
+    "\uf03b": "[REC]",   # Recirculação de ar
+    "\uf041": "A",
+    "\uf055": "U",
+    "\uf054": "T",
+    "\uf043": "C",
+    "\uf0c8": "/",
+    "\uf031": "1",
+    "\uf032": "2",
+}
 
 
 # =====================================================================
@@ -70,7 +89,6 @@ def _cor_tupla_para_objeto(
     if n == 1:
         return {"space": "gray", "components": [round(cor_seq[0], 4)], "alpha": opacidade}
     elif n == 3:
-        # Converte 0.0-1.0 para 0-255 para manter consistência em RGB
         return {
             "space": "rgb",
             "components": [int(round(c * 255)) for c in cor_seq],
@@ -123,70 +141,346 @@ def _criar_source(
 
 
 # =====================================================================
-# Extratores por Tipo de Elemento
+# Limpeza de Texto, Sobrescritos e Heurísticas de Agrupamento
 # =====================================================================
+
+def _normalizar_texto_span(
+    texto: str, is_superscript: bool, texto_anterior: str
+) -> str:
+    """
+    Corrige caracteres da Private Use Area (PUA) e converte letras 'o'/'a'
+    sobrescritas em indicadores ordinais Unicode ('º'/'ª') quando precedidas
+    por dígitos ou 'N'/'n' (ex.: 'No PR' -> 'Nº PR', '1a revisão' -> '1ª revisão').
+    """
+    if not texto:
+        return ""
+
+    # Substitui glifos PUA conhecidos e remove outros PUA isolados de controle
+    partes = []
+    for ch in texto:
+        if ch in MAPA_PUA_VW:
+            partes.append(MAPA_PUA_VW[ch])
+        elif 0xE000 <= ord(ch) <= 0xF8FF:
+            # Mantém vazio para não sujar o texto com caracteres invisíveis/inválidos
+            continue
+        else:
+            partes.append(ch)
+    texto_limpo = "".join(partes)
+
+    if is_superscript and texto_anterior:
+        ultimo_char = texto_anterior[-1]
+        if texto_limpo in ("o", "o.", "os") and (ultimo_char.isdigit() or ultimo_char in ("N", "n")):
+            texto_limpo = "º" + texto_limpo[1:]
+        elif texto_limpo in ("a", "a.", "as") and ultimo_char.isdigit():
+            texto_limpo = "ª" + texto_limpo[1:]
+        elif re.match(r"^[a-z]\)$", texto_limpo.strip()) and ultimo_char == "_":
+            texto_limpo = " " + texto_limpo.lstrip()
+
+    return texto_limpo
+
+
+def _limpar_linha_texto(texto_linha: str) -> str:
+    """Comprime múltiplos espaços de tabulação de sumário sem perder o alinhamento."""
+    # Reduz sequências de 3+ espaços seguidos por número no final da linha (típico do Índice)
+    texto_linha = re.sub(r"\s{3,}(\d+)$", r" \1", texto_linha.rstrip())
+    # Reduz múltiplos espaços internos excessivos
+    texto_linha = re.sub(r" {4,}", "  ", texto_linha)
+    return texto_linha.strip()
+
+
+def _obter_barreiras_horizontais(elementos_formas: List[Dict[str, Any]]) -> List[Tuple[float, float, float]]:
+    """
+    Retorna lista de segmentos horizontais (y, x0, x1) extraídos de shapes (lines e rectangles)
+    para impedir que blocos de texto atravessem linhas divisórias de tabelas/quadros.
+    """
+    barreiras: List[Tuple[float, float, float]] = []
+    for el in elementos_formas:
+        if el.get("type") != "shape":
+            continue
+        b = el["bbox"]
+        x0, y0, w, h = b["x"], b["y"], b["width"], b["height"]
+        if el.get("shape_type") == "line" and h <= 1.5 and w >= 15.0:
+            barreiras.append((y0, x0, x0 + w))
+        elif el.get("shape_type") == "rectangle" and w >= 15.0 and h >= 8.0:
+            barreiras.append((y0, x0, x0 + w))
+            barreiras.append((y0 + h, x0, x0 + w))
+    return barreiras
+
+
+def _existe_barreira_entre(
+    rect_a: fitz.Rect, rect_b: fitz.Rect, barreiras: List[Tuple[float, float, float]]
+) -> bool:
+    """Verifica se há uma linha horizontal desenhada separando verticalmente rect_a e rect_b."""
+    y_sup = min(rect_a.y1, rect_b.y1) - 1.5
+    y_inf = max(rect_a.y0, rect_b.y0) + 1.5
+    if y_inf < y_sup:
+        return False
+
+    x_min = min(rect_a.x0, rect_b.x0)
+    x_max = max(rect_a.x1, rect_b.x1)
+
+    for y_bar, bx0, bx1 in barreiras:
+        if y_sup <= y_bar <= y_inf:
+            # Verifica sobreposição horizontal significativa
+            intersecao_x = min(x_max, bx1) - max(x_min, bx0)
+            if intersecao_x >= 10.0:
+                return True
+    return False
+
+
+def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extrai todas as linhas do PyMuPDF individualmente, separando spans que estão
+    na mesma linha vertical mas muito distantes horizontalmente (ex.: rodapé com
+    título de seção de um lado e número da página do outro).
+    """
+    linhas_atomicas: List[Dict[str, Any]] = []
+
+    for block_idx, block in enumerate(raw_dict.get("blocks", [])):
+        if block.get("type") != 0:
+            continue
+
+        for line in block.get("lines", []):
+            spans = [s for s in line.get("spans", []) if s.get("text", "").strip()]
+            if not spans:
+                continue
+
+            dir_vec = line.get("dir", (1.0, 0.0))
+            dx, dy = dir_vec
+            rotacao = round(math.degrees(math.atan2(dy, dx)) % 360, 2)
+
+            # Subdivide spans na mesma linha caso haja um salto horizontal grande no rodapé
+            grupos_spans: List[List[Dict[str, Any]]] = [[spans[0]]]
+            for sp in spans[1:]:
+                sp_ant = grupos_spans[-1][-1]
+                gap_x = float(sp["bbox"][0]) - float(sp_ant["bbox"][2])
+                y_medio = float(sp["bbox"][1])
+                txt_atual = sp.get("text", "").strip()
+
+                # Se estiver no rodapé (y > 555) e for um número de página isolado distante > 25pt
+                if y_medio > 555.0 and gap_x > 25.0 and txt_atual.isdigit():
+                    grupos_spans.append([sp])
+                else:
+                    grupos_spans[-1].append(sp)
+
+            for grupo in grupos_spans:
+                acumulado_txt = ""
+                contador_fontes: Counter = Counter()
+                contador_tamanhos: Counter = Counter()
+                contador_cores: Counter = Counter()
+                contador_estilos: Counter = Counter()
+                total_peso = 0
+
+                x0 = min(float(s["bbox"][0]) for s in grupo)
+                y0 = min(float(s["bbox"][1]) for s in grupo)
+                x1 = max(float(s["bbox"][2]) for s in grupo)
+                y1 = max(float(s["bbox"][3]) for s in grupo)
+
+                for sp in grupo:
+                    raw_txt = sp.get("text", "")
+                    flags = sp.get("flags", 0)
+                    font_name = sp.get("font") or "unknown"
+                    estilos_sp = _extrair_estilos_span(flags, font_name)
+                    is_sup = "superscript" in estilos_sp
+
+                    txt_norm = _normalizar_texto_span(raw_txt, is_sup, acumulado_txt)
+                    if not txt_norm:
+                        continue
+                    acumulado_txt += txt_norm
+
+                    peso = len(txt_norm.strip())
+                    if peso == 0:
+                        continue
+
+                    total_peso += peso
+                    font_size = round(float(sp.get("size", 0.0)), 2)
+                    color_int = sp.get("color", 0)
+
+                    contador_fontes[font_name] += peso
+                    contador_tamanhos[font_size] += peso
+                    contador_cores[color_int] += peso
+                    for est in estilos_sp:
+                        contador_estilos[est] += peso
+
+                texto_limpo = _limpar_linha_texto(acumulado_txt)
+                if not texto_limpo or total_peso == 0:
+                    continue
+
+                fonte_dom = contador_fontes.most_common(1)[0][0]
+                tam_dom = contador_tamanhos.most_common(1)[0][0]
+                cor_dom = contador_cores.most_common(1)[0][0]
+
+                linhas_atomicas.append({
+                    "block_idx": block_idx,
+                    "rect": fitz.Rect(x0, y0, x1, y1),
+                    "text": texto_limpo,
+                    "font": fonte_dom,
+                    "font_size": tam_dom,
+                    "color_int": cor_dom,
+                    "contador_fontes": contador_fontes,
+                    "contador_tamanhos": contador_tamanhos,
+                    "contador_cores": contador_cores,
+                    "contador_estilos": contador_estilos,
+                    "total_peso": total_peso,
+                    "rotation": rotacao,
+                })
+
+    return linhas_atomicas
+
+
+def _deve_unir_linhas(
+    grupo_atual: List[Dict[str, Any]],
+    prox_linha: Dict[str, Any],
+    barreiras: List[Tuple[float, float, float]],
+) -> bool:
+    """
+    Decide se `prox_linha` pertence ao mesmo bloco textual (parágrafo, item de lista
+    ou seção do sumário) de `grupo_atual`.
+    """
+    ultima = grupo_atual[-1]
+    r1: fitz.Rect = ultima["rect"]
+    r2: fitz.Rect = prox_linha["rect"]
+
+    # 1. Rotações diferentes nunca se unem
+    if abs(ultima["rotation"] - prox_linha["rotation"]) > 1.0:
+        return False
+
+    # 2. Nunca unir texto do corpo com rodapé (y > 560) ou se ambos no rodapé estiverem afastados
+    if (r1.y0 < 560.0 <= r2.y0) or (r1.y0 >= 560.0 and abs(r2.x0 - r1.x0) > 20.0):
+        return False
+
+    # 3. Se houver uma linha horizontal de tabela/quadro entre as duas linhas, separa!
+    if _existe_barreira_entre(r1, r2, barreiras):
+        return False
+
+    # 4. Verifica distância vertical (deve fluir para baixo na mesma coluna)
+    gap_y = r2.y0 - r1.y1
+    altura_ref = max(r1.height, ultima["font_size"], 7.5)
+    if gap_y < -3.0 or gap_y > altura_ref * 1.45:
+        return False
+
+    # 5. Verifica se estão na mesma coluna horizontal
+    sobreposicao_x = min(r1.x1, r2.x1) - max(r1.x0, r2.x0)
+    deslocamento_x0 = r2.x0 - r1.x0
+    if sobreposicao_x < -5.0 and abs(deslocamento_x0) > 80.0:
+        return False
+
+    # 6. Se tamanho da fonte mudar drasticamente (> 1.2pt), é título vs corpo -> separa!
+    if abs(ultima["font_size"] - prox_linha["font_size"]) > 1.2:
+        return False
+
+    # 7. Se a cor mudar (ex.: título azul vs texto preto), separa!
+    if ultima["color_int"] != prox_linha["color_int"]:
+        return False
+
+    txt1 = ultima["text"].strip()
+    txt2 = prox_linha["text"].strip()
+
+    # 8. Caso Sumário/Índice: cabeçalho de seção em negrito seguido de itens '– ...'
+    is_bold_1 = ultima["contador_estilos"]["bold"] > (ultima["total_peso"] * 0.5)
+    is_bold_2 = prox_linha["contador_estilos"]["bold"] > (prox_linha["total_peso"] * 0.5)
+
+    # No índice (páginas 6 e 7), itens começam com '– ' e quebras de linha recuam ~8.5pt
+    if txt2.startswith("– ") and (txt1.startswith("– ") or (is_bold_1 and not txt1[-1].isdigit())):
+        if ultima["block_idx"] == prox_linha["block_idx"]:
+            return True
+
+    # Continuação de item de índice quebrado em 2 linhas (ex.: '– Sistema de travamento e de partida sem' -> 'chave “Keyless Access” 66')
+    if txt1.startswith("– ") and not re.search(r"\b\d{1,3}$", txt1) and not txt2.startswith("– "):
+        if 0.0 <= deslocamento_x0 <= 15.0:
+            return True
+
+    # Se a primeira linha for um título em negrito e a próxima for texto normal (ex.: 'Certificado de garantia...' ou 'Plano Digital de Serviços')
+    if is_bold_1 != is_bold_2 and not txt1.startswith("– "):
+        # Só une se a primeira linha terminar explicitamente no meio de uma palavra hifenizada
+        if not txt1.endswith("-"):
+            return False
+
+    # 9. Novo item de lista ('– ' ou '• ') inicia um novo bloco se o bloco atual não for lista do Sumário
+    if (txt2.startswith("– ") or txt2.startswith("• ")) and not re.search(r"\s\d{1,3}$", txt2):
+        return False
+
+    # 10. Continuação de item de lista com recuo pendente (Hanging Indent: x0 avança ~8.5pt)
+    if (txt1.startswith("– ") or txt1.startswith("• ")) and (0.0 <= deslocamento_x0 <= 14.0):
+        return True
+
+    # 11. Linhas que já estavam no mesmo bloco nativo do PyMuPDF (e passaram nos filtros de barreira/estilo acima)
+    if ultima["block_idx"] == prox_linha["block_idx"]:
+        return True
+
+    # 12. Parágrafo centralizado ou justificado que foi quebrado pelo PyMuPDF (ex.: pág 2 'Para vendas dire-' -> 'tas, a garantia...')
+    centro_1 = (r1.x0 + r1.x1) / 2.0
+    centro_2 = (r2.x0 + r2.x1) / 2.0
+    alinhado_centro = abs(centro_1 - centro_2) <= 6.0
+    alinhado_esq = abs(deslocamento_x0) <= 2.0
+
+    if (alinhado_centro or alinhado_esq) and not txt1.endswith((".", "!", ":", "?")):
+        return True
+
+    return False
+
 
 def _extrair_textos_da_pagina(
     raw_dict: Dict[str, Any],
     page_w: float,
     page_h: float,
     content_xref: Optional[int],
+    elementos_formas: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Extrai blocos de texto agrupados por parágrafo/frase contígua."""
-    textos_extraidos = []
+    """
+    Extrai blocos de texto agrupados de forma inteligente:
+      - Separa células de tabela e títulos divididos por linhas horizontais.
+      - Reagrupa listas com recuo pendente (hanging indents) e parágrafos centralizados.
+      - Atribui 'style' apenas quando predominante (>50% dos caracteres do bloco).
+    """
+    barreiras = _obter_barreiras_horizontais(elementos_formas)
+    linhas = _extrair_linhas_atomicas(raw_dict)
+    if not linhas:
+        return []
 
-    for block in raw_dict.get("blocks", []):
-        if block.get("type") != 0:  # 0 = texto
-            continue
+    grupos: List[List[Dict[str, Any]]] = [[linhas[0]]]
+    for linha in linhas[1:]:
+        if _deve_unir_linhas(grupos[-1], linha, barreiras):
+            grupos[-1].append(linha)
+        else:
+            grupos.append([linha])
 
-        linhas_texto = []
-        contador_fontes: Counter = Counter()
-        contador_tamanhos: Counter = Counter()
-        contador_cores: Counter = Counter()
-        estilos_encontrados = set()
-        direcoes = []
-
-        for line in block.get("lines", []):
-            partes_linha = []
-            dir_vec = line.get("dir", (1.0, 0.0))
-            direcoes.append(dir_vec)
-
-            for span in line.get("spans", []):
-                txt = span.get("text", "")
-                if not txt:
-                    continue
-                partes_linha.append(txt)
-
-                peso = len(txt.strip()) or 1
-                font_name = span.get("font") or "unknown"
-                font_size = round(float(span.get("size", 0.0)), 2)
-                color_int = span.get("color", 0)
-                flags = span.get("flags", 0)
-
-                contador_fontes[font_name] += peso
-                contador_tamanhos[font_size] += peso
-                contador_cores[color_int] += peso
-                estilos_encontrados.update(_extrair_estilos_span(flags, font_name))
-
-            if partes_linha:
-                linhas_texto.append("".join(partes_linha))
-
-        conteudo_final = "\n".join(linhas_texto).strip()
+    textos_extraidos: List[Dict[str, Any]] = []
+    for grupo in grupos:
+        textos_linhas = [l["text"] for l in grupo]
+        conteudo_final = "\n".join(textos_linhas).strip()
         if not conteudo_final:
             continue
 
-        fonte_predominante = contador_fontes.most_common(1)[0][0] if contador_fontes else None
-        tamanho_predominante = contador_tamanhos.most_common(1)[0][0] if contador_tamanhos else None
-        cor_predominante = contador_cores.most_common(1)[0][0] if contador_cores else None
+        x0 = min(l["rect"].x0 for l in grupo)
+        y0 = min(l["rect"].y0 for l in grupo)
+        x1 = max(l["rect"].x1 for l in grupo)
+        y1 = max(l["rect"].y1 for l in grupo)
 
-        # Calcula rotação do bloco a partir do vetor diretor (cos, sin)
-        rotacao = 0.0
-        if direcoes:
-            dx, dy = direcoes[0]
-            rotacao = round(math.degrees(math.atan2(dy, dx)) % 360, 2)
+        contador_fontes: Counter = Counter()
+        contador_tamanhos: Counter = Counter()
+        contador_cores: Counter = Counter()
+        contador_estilos: Counter = Counter()
+        peso_total_bloco = 0
 
-        rect = fitz.Rect(block["bbox"])
-        bbox, norm_bbox = _calcular_bboxes(rect, page_w, page_h)
+        for l in grupo:
+            contador_fontes.update(l["contador_fontes"])
+            contador_tamanhos.update(l["contador_tamanhos"])
+            contador_cores.update(l["contador_cores"])
+            contador_estilos.update(l["contador_estilos"])
+            peso_total_bloco += l["total_peso"]
+
+        fonte_pred = contador_fontes.most_common(1)[0][0] if contador_fontes else None
+        tam_pred = contador_tamanhos.most_common(1)[0][0] if contador_tamanhos else None
+        cor_pred = contador_cores.most_common(1)[0][0] if contador_cores else None
+
+        # Só inclui um estilo na lista 'style' se ele cobrir mais de 50% dos caracteres do bloco
+        estilos_predominantes = sorted([
+            est for est, qtd in contador_estilos.items()
+            if qtd >= (peso_total_bloco * 0.5)
+        ])
+
+        bbox, norm_bbox = _calcular_bboxes(fitz.Rect(x0, y0, x1, y1), page_w, page_h)
 
         textos_extraidos.append({
             "type": "text",
@@ -195,18 +489,129 @@ def _extrair_textos_da_pagina(
             "source_id": None,
             "source": _criar_source(content_stream_xref=content_xref),
             "extraction_method": "native",
-            "rotation": rotacao,
+            "rotation": grupo[0]["rotation"],
             "transform": None,
             "parent_id": None,
             "content": conteudo_final,
-            "font": fonte_predominante,
-            "font_size": tamanho_predominante,
-            "color": _cor_int_para_objeto(cor_predominante, alpha=1.0),
-            "style": sorted(estilos_encontrados),
+            "font": fonte_pred,
+            "font_size": tam_pred,
+            "color": _cor_int_para_objeto(cor_pred, alpha=1.0),
+            "style": estilos_predominantes,
         })
 
     return textos_extraidos
 
+
+# =====================================================================
+# Fallback de OCR para Imagens de Página Inteira (Regra 10)
+# =====================================================================
+
+def _executar_ocr_em_imagem_pagina(
+    page: fitz.Page,
+    img_elem: Dict[str, Any],
+    img_path_abs: Path,
+    page_w: float,
+    page_h: float,
+    content_xref: Optional[int],
+) -> List[Dict[str, Any]]:
+    """
+    Executa OCR complementar em imagens grandes de conteúdo (como nas páginas 3 e 4)
+    quando não há texto nativo extraído sobre a região da imagem.
+    Suporta RapidOCR, PyMuPDF Tesseract nativo ou pytesseract.
+    """
+    ib = img_elem["bbox"]
+    img_rect = fitz.Rect(ib["x"], ib["y"], ib["x"] + ib["width"], ib["y"] + ib["height"])
+    elementos_ocr: List[Dict[str, Any]] = []
+
+    # 1. Tenta RapidOCR (ONNX, leve e independente de binários do sistema)
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+
+        if not hasattr(_executar_ocr_em_imagem_pagina, "_rapid_engine"):
+            _executar_ocr_em_imagem_pagina._rapid_engine = RapidOCR()
+        engine = _executar_ocr_em_imagem_pagina._rapid_engine
+
+        result, _ = engine(str(img_path_abs))
+        if result:
+            escala_x = ib["width"] / float(img_elem["original_width"] or 1)
+            escala_y = ib["height"] / float(img_elem["original_height"] or 1)
+
+            for box, texto, _conf in result:
+                texto_limpo = (texto or "").strip()
+                if not texto_limpo:
+                    continue
+                xs = [pt[0] for pt in box]
+                ys = [pt[1] for pt in box]
+                rx0 = ib["x"] + min(xs) * escala_x
+                ry0 = ib["y"] + min(ys) * escala_y
+                rx1 = ib["x"] + max(xs) * escala_x
+                ry1 = ib["y"] + max(ys) * escala_y
+
+                bbox, norm_bbox = _calcular_bboxes(fitz.Rect(rx0, ry0, rx1, ry1), page_w, page_h)
+                elementos_ocr.append({
+                    "type": "text",
+                    "bbox": bbox,
+                    "normalized_bbox": norm_bbox,
+                    "source_id": img_elem.get("source_id"),
+                    "source": dict(img_elem.get("source", {})),
+                    "extraction_method": "ocr",
+                    "rotation": 0.0,
+                    "transform": None,
+                    "parent_id": img_elem.get("id"),
+                    "content": texto_limpo,
+                    "font": None,
+                    "font_size": None,
+                    "color": None,
+                    "style": [],
+                })
+            return elementos_ocr
+    except Exception:
+        pass
+
+    # 2. Tenta OCR nativo do PyMuPDF (Tesseract integrado)
+    try:
+        tp_ocr = page.get_textpage_ocr(flags=0, language="por", dpi=300, full=False)
+        ocr_dict = page.get_text("dict", textpage=tp_ocr)
+        for block in ocr_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            b_rect = fitz.Rect(block["bbox"])
+            if not b_rect.intersects(img_rect):
+                continue
+            linhas = []
+            for line in block.get("lines", []):
+                txt_l = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
+                if txt_l:
+                    linhas.append(txt_l)
+            conteudo = "\n".join(linhas).strip()
+            if not conteudo:
+                continue
+            bbox, norm_bbox = _calcular_bboxes(b_rect, page_w, page_h)
+            elementos_ocr.append({
+                "type": "text",
+                "bbox": bbox,
+                "normalized_bbox": norm_bbox,
+                "source_id": img_elem.get("source_id"),
+                "source": dict(img_elem.get("source", {})),
+                "extraction_method": "ocr",
+                "rotation": 0.0,
+                "transform": None,
+                "parent_id": img_elem.get("id"),
+                "content": conteudo,
+                "font": None,
+                "font_size": None,
+                "color": None,
+                "style": [],
+            })
+    except Exception:
+        pass
+
+    return elementos_ocr
+
+
+# =====================================================================
+# Extratores de Imagens, Vetores, Formas e Links
+# =====================================================================
 
 def _resolver_bytes_imagem(
     doc: fitz.Document, xref: int, smask_xref: Optional[int]
@@ -219,19 +624,16 @@ def _resolver_bytes_imagem(
     if not info_base:
         raise ValueError(f"Não foi possível extrair a imagem de xref={xref}")
 
-    # Se possuir SMask válido, recompõe a imagem com canal alfa via Pixmap
     if smask_xref and smask_xref > 0:
         try:
             pix_base = fitz.Pixmap(doc, xref)
             pix_mask = fitz.Pixmap(doc, smask_xref)
-            # Se a imagem base estiver em CMYK ou outro espaço sem suporte direto a alfa, converte para RGB
             if pix_base.colorspace and pix_base.colorspace.n > 3:
                 pix_base = fitz.Pixmap(fitz.csRGB, pix_base)
             pix_composto = fitz.Pixmap(pix_base, pix_mask)
             img_bytes = pix_composto.tobytes("png")
             return img_bytes, "png", pix_composto.width, pix_composto.height
         except Exception:
-            # Fallback para os bytes originais caso a máscara seja incompatível
             pass
 
     return (
@@ -255,10 +657,8 @@ def _extrair_imagens_da_pagina(
     imagens_extraidas = []
     infos_imagens = page.get_image_info(xrefs=True)
 
-    # Mapeia xref -> (smask_xref, resource_name) a partir da lista de recursos da página
     mapa_recursos: Dict[int, Tuple[Optional[int], Optional[str]]] = {}
     for item in page.get_images(full=True):
-        # item = (xref, smask, width, height, bpc, colorspace, alt_cs, name, filter, referencer)
         img_xref = item[0]
         smask = item[1] if item[1] > 0 else None
         res_name = item[7] if item[7] else None
@@ -278,7 +678,6 @@ def _extrair_imagens_da_pagina(
 
         content_hash = hashlib.sha256(img_bytes).hexdigest()
 
-        # Desduplicação: salva no disco apenas se o hash ainda não existir
         if content_hash not in registro_hashes:
             novo_indice = len(registro_hashes) + 1
             asset_id = f"asset_{novo_indice:06d}"
@@ -328,16 +727,16 @@ def _extrair_imagens_da_pagina(
 def _serializar_comando_vetorial(item: Tuple[Any, ...]) -> Dict[str, Any]:
     """Converte uma tupla de comando de desenho do PyMuPDF para JSON."""
     op = item[0]
-    if op == "l":  # Linha entre p1 e p2
+    if op == "l":
         p1, p2 = item[1], item[2]
         return {"op": "l", "p1": [round(p1.x, 2), round(p1.y, 2)], "p2": [round(p2.x, 2), round(p2.y, 2)]}
-    elif op == "re":  # Retângulo
+    elif op == "re":
         r = item[1]
         return {
             "op": "re",
             "rect": [round(r.x0, 2), round(r.y0, 2), round(r.width, 2), round(r.height, 2)],
         }
-    elif op == "qu":  # Quad
+    elif op == "qu":
         q = item[1]
         return {
             "op": "qu",
@@ -348,7 +747,7 @@ def _serializar_comando_vetorial(item: Tuple[Any, ...]) -> Dict[str, Any]:
                 [round(q.lr.x, 2), round(q.lr.y, 2)],
             ],
         }
-    elif op == "c":  # Curva de Bézier cúbica (p1, p2, p3, p4)
+    elif op == "c":
         pts = [[round(p.x, 2), round(p.y, 2)] for p in item[1:5]]
         return {"op": "c", "points": pts}
     return {"op": str(op), "raw": str(item[1:])}
@@ -374,7 +773,6 @@ def _extrair_vetores_e_formas_da_pagina(
 
         items = path.get("items", [])
 
-        # Verifica se é uma primitiva pura (1 único comando 're' ou 'l')
         if len(items) == 1 and items[0][0] == "re":
             r = items[0][1]
             elementos.append({
@@ -525,7 +923,6 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
     # 1. Monta e salva metadata.json
     meta_raw = doc.metadata or {}
     versao_pdf = None
-    # Busca versão no catálogo ou no cabeçalho do arquivo
     with open(pdf_path, "rb") as f_head:
         cabecalho = f_head.read(20).decode("latin-1", errors="ignore")
         match_ver = re.search(r"%PDF-(\d+\.\d+)", cabecalho)
@@ -568,16 +965,49 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
 
             raw_dict = page.get_text("dict")
 
-            # Extrai cada categoria de elemento
-            elementos_pagina: List[Dict[str, Any]] = []
-            elementos_pagina.extend(_extrair_textos_da_pagina(raw_dict, page_w, page_h, content_xref))
-            elementos_pagina.extend(
-                _extrair_imagens_da_pagina(
-                    doc, page, page_w, page_h, content_xref, assets_dir, registro_hashes_imagens
-                )
+            # Extrai vetores/formas primeiro para usar as linhas horizontais como barreiras de texto
+            elementos_vetores_formas = _extrair_vetores_e_formas_da_pagina(
+                page, page_w, page_h, content_xref
             )
-            elementos_pagina.extend(_extrair_vetores_e_formas_da_pagina(page, page_w, page_h, content_xref))
-            elementos_pagina.extend(_extrair_links_da_pagina(doc, page, page_w, page_h))
+            elementos_texto = _extrair_textos_da_pagina(
+                raw_dict, page_w, page_h, content_xref, elementos_vetores_formas
+            )
+            elementos_imagens = _extrair_imagens_da_pagina(
+                doc, page, page_w, page_h, content_xref, assets_dir, registro_hashes_imagens
+            )
+            elementos_links = _extrair_links_da_pagina(doc, page, page_w, page_h)
+
+            # Verifica se há imagens grandes rasterizadas sem texto nativo sobreposto (ex.: páginas 3 e 4)
+            textos_ocr: List[Dict[str, Any]] = []
+            for img_el in elementos_imagens:
+                nb = img_el["normalized_bbox"]
+                # Imagem dentro da página ocupando mais de 35% da área da página
+                if nb["x"] >= 0.0 and nb["y"] >= 0.0 and (nb["width"] * nb["height"]) >= 0.35:
+                    ib = img_el["bbox"]
+                    rect_img = fitz.Rect(ib["x"], ib["y"], ib["x"] + ib["width"], ib["y"] + ib["height"])
+                    textos_sobre_imagem = [
+                        t for t in elementos_texto
+                        if fitz.Rect(
+                            t["bbox"]["x"],
+                            t["bbox"]["y"],
+                            t["bbox"]["x"] + t["bbox"]["width"],
+                            t["bbox"]["y"] + t["bbox"]["height"],
+                        ).intersects(rect_img)
+                    ]
+                    if not textos_sobre_imagem:
+                        caminho_img_disco = output_dir / img_el["path"]
+                        textos_ocr.extend(
+                            _executar_ocr_em_imagem_pagina(
+                                page, img_el, caminho_img_disco, page_w, page_h, content_xref
+                            )
+                        )
+
+            elementos_pagina: List[Dict[str, Any]] = []
+            elementos_pagina.extend(elementos_texto)
+            elementos_pagina.extend(textos_ocr)
+            elementos_pagina.extend(elementos_imagens)
+            elementos_pagina.extend(elementos_vetores_formas)
+            elementos_pagina.extend(elementos_links)
 
             # Atribui ID global único e extraction_order (1..N na página)
             for ordem_ext, elem in enumerate(elementos_pagina, start=1):
@@ -617,20 +1047,22 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
         f" - Diretório de saída: {output_dir}"
     )
 
+
 # ==============================================================
 # Extrai o conteúdo do PDF para um arquivo JSONL parametrizado
 # ==============================================================
 
-from utils.caminhos import raiz
+if __name__ == "__main__":
+    from utils.caminhos import raiz
 
-pdf_path = raiz["dados_extraidos"]["pdf_original"]
-pdf_hash_path = raiz["dados_extraidos"]["pdf_original_hash"]
-diretorio_saida = raiz["dados_extraidos"]["conteudo_extraido"]["path"]
-hash_atual = pdf_hash_path.read_text(encoding="utf-8").strip()
+    pdf_path = raiz["dados_extraidos"]["pdf_original"]
+    pdf_hash_path = raiz["dados_extraidos"]["pdf_original_hash"]
+    diretorio_saida = raiz["dados_extraidos"]["conteudo_extraido"]["path"]
+    hash_atual = pdf_hash_path.read_text(encoding="utf-8").strip()
 
-print(f"Iniciando extração bruta de '{pdf_path.name}'...")
-extrair_pdf_bruto(
-    pdf_path=pdf_path,
-    output_dir=diretorio_saida,
-    file_sha256=hash_atual,
-)
+    print(f"Iniciando extração bruta de '{pdf_path.name}'...")
+    extrair_pdf_bruto(
+        pdf_path=pdf_path,
+        output_dir=diretorio_saida,
+        file_sha256=hash_atual,
+    )
