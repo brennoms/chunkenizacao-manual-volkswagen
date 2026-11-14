@@ -37,9 +37,10 @@ Agrupa primitivas gráficas sobrepostas que formam um único símbolo visual e a
 #### Procedimento Técnico
 1. **Seleção de Candidatos:** todos os elementos `vector`, elementos `shape` compactos ($\text{width} \le 40\text{ pt}$ e $\text{height} \le 40\text{ pt}$, excluindo linhas longas de grade) e textos curtos ($\le 5$ caracteres, como `!`, `i`, `P`, `ABS`, `OFF`, números de chamadas) sobrepostos a vetores ou formas.
 2. **Fusão Espacial (*Union-Find*):** candidatos na mesma página cujas caixas delimitadoras se interceptam (com tolerância de expansão de $1.5\text{ pt}$) são fundidos em um único elemento `"type": "icon"`, assumindo o `bbox` envolvente do conjunto.
-3. **Desduplicação e Identificador Compartilhado (`icon_id`):**
-   - A região do `bbox` de cada ícone consolidado é recortada da página renderizada e submetida a um cálculo de **Hash Perceptual (`dHash` de 64 bits)** combinado à cor predominante.
-   - Ícones visualmente equivalentes recebem o mesmo `icon_id` global (ex.: `icon_0001`), gerando uma única imagem de referência em `assets/icons/icon_0001.png` e um registro no catálogo `icons_catalog.json`.
+3. **Identificadores e Desduplicação:**
+   - A região do `bbox` de cada ícone consolidado é recortada da página renderizada e submetida a um cálculo de **Hash Perceptual (`pHash` de 64 bits)**. A distância de Hamming é usada para aceitar pequenas variações de rasterização, em conjunto com a cor predominante e a proporção do `bbox`.
+   - Cada ocorrência de ícone recebe um `icon_order_id` inteiro sequencial global, começando em `1` no primeiro ícone do PDF e incrementando a cada instância, mesmo quando o ícone é igual a outro.
+   - Ícones visualmente equivalentes recebem o mesmo `icon_id` global (ex.: `icon_0001`), gerando uma única imagem de referência em `assets/icons/icon_0001.png` e um registro no catálogo `icons_catalog.json`. Portanto, `icon_id` identifica o modelo visual compartilhado, enquanto `icon_order_id` identifica a instância no PDF.
 4. **Classificação Posicional do Ícone:**
    - **Inline (`inline`):** ícones contidos na faixa vertical de uma linha de texto são convertidos na marcação `<icon:icon_XXXX>` diretamente dentro da string de texto do parágrafo.
    - **Bloco/Coluna (`standalone`):** ícones isolados (como em colunas de tabelas de luzes de advertência ou cabeçalhos de alerta) são vinculados diretamente à estrutura pai (célula da tabela ou caixa de alerta).
@@ -118,7 +119,11 @@ dados_preparados/
 │   ├── asset_000001.png
 │   ├── asset_000002.jpeg
 │   ├── ...
-│   └── icons/
+│   ├── icons/
+│       ├── icon_0001.png
+│       ├── icon_0002.png
+│       └── ...
+│   └── paridade/
 │       ├── icon_0001.png
 │       ├── icon_0002.png
 │       └── ...
@@ -128,6 +133,11 @@ dados_preparados/
     └── debug_fase3_ordem_leitura.pdf
 
 ```
+
+O catálogo `icons_catalog.json` também possui um resumo com `icones_encontrados` (ocorrências
+consolidadas), `icones_diferentes` (identificadores globais distintos) e `paridade_path`.
+Esse caminho aponta para uma única imagem com os painéis de todas as matrizes de paridade,
+identificados por `icon_id`.
 
 ---
 
@@ -152,7 +162,27 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
 
 ---
 
-### 4.2. Atributos Específicos por Tipo
+### 4.2. Elemento Ícone — `type: "icon"` (`document_fase2.jsonl`)
+
+Os ícones consolidados na Fase 2 possuem os dois identificadores abaixo:
+
+| Parâmetro | Tipo | Descrição |
+| --- | --- | --- |
+| `icon_id` | `string` | Identificador global do modelo visual. Ocorrências equivalentes compartilham o mesmo valor. |
+| `icon_order_id` | `int` | Identificador da instância no PDF. É único por ocorrência e começa em `1` no primeiro ícone do PDF, sem reiniciar por página e sem deduplicar ícones iguais. |
+
+```json
+{
+  "id": "icon_source_1_0001",
+  "type": "icon",
+  "icon_id": "icon_0001",
+  "icon_order_id": 1,
+  "classification": "standalone",
+  "source_element_ids": ["el_000213"]
+}
+```
+
+### 4.3. Atributos Específicos por Tipo
 
 #### Título — `type: "heading"`
 
