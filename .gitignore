@@ -1,5 +1,10 @@
 venv/
 __pycache__/
 *.egg-info/
-dados_extraidos/
-dados_preparados/
+
+dados_extraidos/conteudo_extraido/
+
+dados_preparados/assets/
+dados_preparados/debug_visual/
+dados_preparados/document*
+dados_preparados/icons_catalog.json
