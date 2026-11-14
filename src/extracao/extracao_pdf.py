@@ -11,7 +11,7 @@ import pymupdf as fitz  # PyMuPDF
 
 from utils.funcoes import calcular_hash_sha256
 
-EXTRACTOR_VERSION = "1.1.0"
+EXTRACTOR_VERSION = "1.2.0"
 SCHEMA_VERSION = "1.0.0"
 
 # Mapeamento de glifos da Private Use Area (PUA) das fontes proprietárias VW
@@ -141,7 +141,7 @@ def _criar_source(
 
 
 # =====================================================================
-# Limpeza de Texto, Sobrescritos e Heurísticas de Agrupamento
+# Limpeza de Texto, Barreiras Geométricas e Heurísticas de Agrupamento
 # =====================================================================
 
 def _normalizar_texto_span(
@@ -155,13 +155,11 @@ def _normalizar_texto_span(
     if not texto:
         return ""
 
-    # Substitui glifos PUA conhecidos e remove outros PUA isolados de controle
     partes = []
     for ch in texto:
         if ch in MAPA_PUA_VW:
             partes.append(MAPA_PUA_VW[ch])
         elif 0xE000 <= ord(ch) <= 0xF8FF:
-            # Mantém vazio para não sujar o texto com caracteres invisíveis/inválidos
             continue
         else:
             partes.append(ch)
@@ -169,79 +167,162 @@ def _normalizar_texto_span(
 
     if is_superscript and texto_anterior:
         ultimo_char = texto_anterior[-1]
-        if texto_limpo in ("o", "o.", "os") and (ultimo_char.isdigit() or ultimo_char in ("N", "n")):
-            texto_limpo = "º" + texto_limpo[1:]
-        elif texto_limpo in ("a", "a.", "as") and ultimo_char.isdigit():
-            texto_limpo = "ª" + texto_limpo[1:]
-        elif re.match(r"^[a-z]\)$", texto_limpo.strip()) and ultimo_char == "_":
+        txt_str = texto_limpo.strip()
+        if txt_str in ("o", "o.", "os") and (ultimo_char.isdigit() or ultimo_char in ("N", "n")):
+            texto_limpo = texto_limpo.replace("o", "º", 1)
+        elif txt_str in ("a", "a.", "as") and ultimo_char.isdigit():
+            texto_limpo = texto_limpo.replace("a", "ª", 1)
+        elif re.match(r"^[a-z0-9]\)$", txt_str) and ultimo_char == "_":
             texto_limpo = " " + texto_limpo.lstrip()
 
     return texto_limpo
 
 
 def _limpar_linha_texto(texto_linha: str) -> str:
-    """Comprime múltiplos espaços de tabulação de sumário sem perder o alinhamento."""
+    """Comprime múltiplos espaços de tabulação e remove pontilhados de legenda."""
+    # Remove linhas pontilhadas longas de legendas ("Maçanetas....... 68" ou "Maçanetas.......")
+    texto_linha = re.sub(r"\.{4,}\s*", " ", texto_linha)
     # Reduz sequências de 3+ espaços seguidos por número no final da linha (típico do Índice)
     texto_linha = re.sub(r"\s{3,}(\d+)$", r" \1", texto_linha.rstrip())
     # Reduz múltiplos espaços internos excessivos
-    texto_linha = re.sub(r" {4,}", "  ", texto_linha)
+    texto_linha = re.sub(r" {2,}", " ", texto_linha)
     return texto_linha.strip()
 
 
-def _obter_barreiras_horizontais(elementos_formas: List[Dict[str, Any]]) -> List[Tuple[float, float, float]]:
+def _obter_barreiras(
+    elementos_formas: List[Dict[str, Any]]
+) -> Tuple[List[Tuple[float, float, float]], List[Tuple[float, float, float]]]:
     """
-    Retorna lista de segmentos horizontais (y, x0, x1) extraídos de shapes (lines e rectangles)
-    para impedir que blocos de texto atravessem linhas divisórias de tabelas/quadros.
+    Extrai barreiras físicas a partir de shapes e vetores:
+      - barreiras_h: (y, x0, x1) para fios horizontais e bordas superiores/inferiores de caixas.
+      - barreiras_v: (x, y0, y1) para fios verticais e bordas laterais de tabelas.
     """
-    barreiras: List[Tuple[float, float, float]] = []
+    barreiras_h: List[Tuple[float, float, float]] = []
+    barreiras_v: List[Tuple[float, float, float]] = []
+
     for el in elementos_formas:
-        if el.get("type") != "shape":
-            continue
         b = el["bbox"]
         x0, y0, w, h = b["x"], b["y"], b["width"], b["height"]
-        if el.get("shape_type") == "line" and h <= 1.5 and w >= 15.0:
-            barreiras.append((y0, x0, x0 + w))
-        elif el.get("shape_type") == "rectangle" and w >= 15.0 and h >= 8.0:
-            barreiras.append((y0, x0, x0 + w))
-            barreiras.append((y0 + h, x0, x0 + w))
-    return barreiras
+        el_type = el.get("type")
+        sh_type = el.get("shape_type")
+
+        if el_type == "shape" and sh_type == "line":
+            if h <= 2.0 and w >= 12.0:
+                barreiras_h.append((y0 + h / 2.0, x0, x0 + w))
+            elif w <= 2.0 and h >= 10.0:
+                barreiras_v.append((x0 + w / 2.0, y0, y0 + h))
+        elif el_type == "shape" and sh_type == "rectangle":
+            if w >= 12.0 and h >= 6.0:
+                barreiras_h.append((y0, x0, x0 + w))
+                barreiras_h.append((y0 + h, x0, x0 + w))
+                barreiras_v.append((x0, y0, y0 + h))
+                barreiras_v.append((x0 + w, y0, y0 + h))
+        elif el_type == "vector":
+            if h <= 2.0 and w >= 15.0:
+                barreiras_h.append((y0 + h / 2.0, x0, x0 + w))
+            elif w <= 2.0 and h >= 12.0:
+                barreiras_v.append((x0 + w / 2.0, y0, y0 + h))
+
+    return barreiras_h, barreiras_v
 
 
-def _existe_barreira_entre(
-    rect_a: fitz.Rect, rect_b: fitz.Rect, barreiras: List[Tuple[float, float, float]]
+def _existe_barreira_horizontal_entre(
+    rect_a: fitz.Rect, rect_b: fitz.Rect, barreiras_h: List[Tuple[float, float, float]]
 ) -> bool:
-    """Verifica se há uma linha horizontal desenhada separando verticalmente rect_a e rect_b."""
-    y_sup = min(rect_a.y1, rect_b.y1) - 1.5
-    y_inf = max(rect_a.y0, rect_b.y0) + 1.5
-    if y_inf < y_sup:
-        return False
+    """
+    Verifica se há uma linha horizontal desenhada entre o centro vertical de rect_a
+    e o centro vertical de rect_b. Usar o centro vertical garante detecção mesmo quando
+    as caixas de texto tocam a linha divisória.
+    """
+    yc_a = (rect_a.y0 + rect_a.y1) / 2.0
+    yc_b = (rect_b.y0 + rect_b.y1) / 2.0
+    y_sup = min(yc_a, yc_b)
+    y_inf = max(yc_a, yc_b)
 
     x_min = min(rect_a.x0, rect_b.x0)
     x_max = max(rect_a.x1, rect_b.x1)
 
-    for y_bar, bx0, bx1 in barreiras:
+    for y_bar, bx0, bx1 in barreiras_h:
         if y_sup <= y_bar <= y_inf:
-            # Verifica sobreposição horizontal significativa
             intersecao_x = min(x_max, bx1) - max(x_min, bx0)
-            if intersecao_x >= 10.0:
+            if intersecao_x >= 8.0:
                 return True
     return False
 
 
-def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _existe_barreira_vertical_entre(
+    rect_esq: fitz.Rect, rect_dir: fitz.Rect, barreiras_v: List[Tuple[float, float, float]]
+) -> bool:
+    """Verifica se há um fio vertical separando duas caixas na mesma linha horizontal."""
+    xc_e = (rect_esq.x0 + rect_esq.x1) / 2.0
+    xc_d = (rect_dir.x0 + rect_dir.x1) / 2.0
+    x_min = min(xc_e, xc_d)
+    x_max = max(xc_e, xc_d)
+
+    y_min = min(rect_esq.y0, rect_dir.y0)
+    y_max = max(rect_esq.y1, rect_dir.y1)
+
+    for x_bar, by0, by1 in barreiras_v:
+        if x_min <= x_bar <= x_max:
+            intersecao_y = min(y_max, by1) - max(y_min, by0)
+            if intersecao_y >= 4.0:
+                return True
+    return False
+
+
+def _mesclar_duas_linhas_horizontais(l_esq: Dict[str, Any], l_dir: Dict[str, Any]) -> Dict[str, Any]:
+    """Funde dois fragmentos que pertencem à mesma linha física horizontal."""
+    precisa_espaco = not l_esq["text"].endswith(" ") and not l_dir["text"].startswith((" ", ",", ".", ":", ";", ")"))
+    novo_texto = _limpar_linha_texto(
+        f"{l_esq['text']}{' ' if precisa_espaco else ''}{l_dir['text']}"
+    )
+
+    novo_rect = fitz.Rect(
+        min(l_esq["rect"].x0, l_dir["rect"].x0),
+        min(l_esq["rect"].y0, l_dir["rect"].y0),
+        max(l_esq["rect"].x1, l_dir["rect"].x1),
+        max(l_esq["rect"].y1, l_dir["rect"].y1),
+    )
+
+    c_fontes = l_esq["contador_fontes"] + l_dir["contador_fontes"]
+    c_tams = l_esq["contador_tamanhos"] + l_dir["contador_tamanhos"]
+    c_cores = l_esq["contador_cores"] + l_dir["contador_cores"]
+    c_ests = l_esq["contador_estilos"] + l_dir["contador_estilos"]
+    peso_tot = l_esq["total_peso"] + l_dir["total_peso"]
+
+    return {
+        "block_idx": l_esq["block_idx"],
+        "rect": novo_rect,
+        "text": novo_texto,
+        "font": c_fontes.most_common(1)[0][0],
+        "font_size": c_tams.most_common(1)[0][0],
+        "color_int": c_cores.most_common(1)[0][0],
+        "contador_fontes": c_fontes,
+        "contador_tamanhos": c_tams,
+        "contador_cores": c_cores,
+        "contador_estilos": c_ests,
+        "total_peso": peso_tot,
+        "rotation": l_esq["rotation"],
+    }
+
+
+def _extrair_linhas_atomicas(
+    raw_dict: Dict[str, Any], barreiras_v: List[Tuple[float, float, float]]
+) -> List[Dict[str, Any]]:
     """
-    Extrai todas as linhas do PyMuPDF individualmente, separando spans que estão
-    na mesma linha vertical mas muito distantes horizontalmente (ex.: rodapé com
-    título de seção de um lado e número da página do outro).
+    Extrai todas as linhas do PyMuPDF preservando espaços entre spans e realiza
+    coalescência horizontal de fragmentos na mesma linha de base (como 'Observe [ícone] no início...'
+    ou botões inline '[0.0/SET]', '[OK]', '[CAR]').
     """
-    linhas_atomicas: List[Dict[str, Any]] = []
+    linhas_brutas: List[Dict[str, Any]] = []
 
     for block_idx, block in enumerate(raw_dict.get("blocks", [])):
         if block.get("type") != 0:
             continue
 
         for line in block.get("lines", []):
-            spans = [s for s in line.get("spans", []) if s.get("text", "").strip()]
+            # Mantém todos os spans não vazios (inclusive espaços simples entre palavras)
+            spans = [s for s in line.get("spans", []) if s.get("text", "") != ""]
             if not spans:
                 continue
 
@@ -249,7 +330,7 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
             dx, dy = dir_vec
             rotacao = round(math.degrees(math.atan2(dy, dx)) % 360, 2)
 
-            # Subdivide spans na mesma linha caso haja um salto horizontal grande no rodapé
+            # Subdivide spans caso haja salto grande para número de página no rodapé ou legenda
             grupos_spans: List[List[Dict[str, Any]]] = [[spans[0]]]
             for sp in spans[1:]:
                 sp_ant = grupos_spans[-1][-1]
@@ -257,8 +338,10 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
                 y_medio = float(sp["bbox"][1])
                 txt_atual = sp.get("text", "").strip()
 
-                # Se estiver no rodapé (y > 555) e for um número de página isolado distante > 25pt
-                if y_medio > 555.0 and gap_x > 25.0 and txt_atual.isdigit():
+                # Separa número de página no rodapé (y > 555) ou número de página à direita de legenda (x > 345)
+                if (y_medio > 555.0 and gap_x > 20.0 and txt_atual.isdigit()) or (
+                    float(sp["bbox"][0]) > 345.0 and gap_x > 18.0 and re.match(r"^[\d,\s]+$", txt_atual)
+                ):
                     grupos_spans.append([sp])
                 else:
                     grupos_spans[-1].append(sp)
@@ -270,11 +353,16 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
                 contador_cores: Counter = Counter()
                 contador_estilos: Counter = Counter()
                 total_peso = 0
+                ultimo_x1: Optional[float] = None
 
-                x0 = min(float(s["bbox"][0]) for s in grupo)
-                y0 = min(float(s["bbox"][1]) for s in grupo)
-                x1 = max(float(s["bbox"][2]) for s in grupo)
-                y1 = max(float(s["bbox"][3]) for s in grupo)
+                spans_com_texto = [s for s in grupo if s.get("text", "").strip()]
+                if not spans_com_texto:
+                    continue
+
+                x0 = min(float(s["bbox"][0]) for s in spans_com_texto)
+                y0 = min(float(s["bbox"][1]) for s in spans_com_texto)
+                x1 = max(float(s["bbox"][2]) for s in spans_com_texto)
+                y1 = max(float(s["bbox"][3]) for s in spans_com_texto)
 
                 for sp in grupo:
                     raw_txt = sp.get("text", "")
@@ -283,10 +371,25 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
                     estilos_sp = _extrair_estilos_span(flags, font_name)
                     is_sup = "superscript" in estilos_sp
 
+                    # Insere espaço se houver distância física entre o fim do span anterior e o início deste
+                    sp_x0 = float(sp["bbox"][0])
+                    sp_x1 = float(sp["bbox"][2])
+                    if (
+                        ultimo_x1 is not None
+                        and (sp_x0 - ultimo_x1) > 1.2
+                        and acumulado_txt
+                        and not acumulado_txt.endswith(" ")
+                        and not raw_txt.startswith(" ")
+                        and not is_sup
+                    ):
+                        acumulado_txt += " "
+
                     txt_norm = _normalizar_texto_span(raw_txt, is_sup, acumulado_txt)
                     if not txt_norm:
                         continue
                     acumulado_txt += txt_norm
+                    if raw_txt.strip():
+                        ultimo_x1 = sp_x1
 
                     peso = len(txt_norm.strip())
                     if peso == 0:
@@ -306,17 +409,13 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if not texto_limpo or total_peso == 0:
                     continue
 
-                fonte_dom = contador_fontes.most_common(1)[0][0]
-                tam_dom = contador_tamanhos.most_common(1)[0][0]
-                cor_dom = contador_cores.most_common(1)[0][0]
-
-                linhas_atomicas.append({
+                linhas_brutas.append({
                     "block_idx": block_idx,
                     "rect": fitz.Rect(x0, y0, x1, y1),
                     "text": texto_limpo,
-                    "font": fonte_dom,
-                    "font_size": tam_dom,
-                    "color_int": cor_dom,
+                    "font": contador_fontes.most_common(1)[0][0],
+                    "font_size": contador_tamanhos.most_common(1)[0][0],
+                    "color_int": contador_cores.most_common(1)[0][0],
                     "contador_fontes": contador_fontes,
                     "contador_tamanhos": contador_tamanhos,
                     "contador_cores": contador_cores,
@@ -325,17 +424,65 @@ def _extrair_linhas_atomicas(raw_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "rotation": rotacao,
                 })
 
-    return linhas_atomicas
+    if not linhas_brutas:
+        return []
+
+    # Passo de Coalescência Horizontal: une fragmentos na mesma linha de base (ex.: 'Observe' + 'no início...', ou texto + botão '[0.0/SET]')
+    # Ordena preliminarmente por faixa vertical (~3pt) e x0 dentro da mesma coluna
+    linhas_ordenadas = sorted(
+        linhas_brutas,
+        key=lambda l: (
+            0 if l["rect"].x0 < 200.0 else 1,
+            round(((l["rect"].y0 + l["rect"].y1) / 2.0) / 3.0),
+            l["rect"].x0,
+        ),
+    )
+
+    linhas_coalescidas: List[Dict[str, Any]] = [linhas_ordenadas[0]]
+    for cand in linhas_ordenadas[1:]:
+        atual = linhas_coalescidas[-1]
+        r_esq = atual["rect"]
+        r_dir = cand["rect"]
+
+        yc_esq = (r_esq.y0 + r_esq.y1) / 2.0
+        yc_dir = (r_dir.y0 + r_dir.y1) / 2.0
+        mesma_altura = abs(yc_esq - yc_dir) <= 3.5
+        gap_x = r_dir.x0 - r_esq.x1
+
+        # Evita mesclar se forem colunas diferentes, rodapé ou números de página de legenda à direita
+        mesma_coluna = (r_esq.x1 < 218.0 and r_dir.x0 < 218.0) or (r_esq.x0 >= 200.0 and r_dir.x0 >= 200.0)
+        eh_rodape = r_esq.y0 > 555.0 or r_dir.y0 > 555.0
+        eh_num_legenda_direita = r_dir.x0 > 345.0 and re.match(r"^[\d,\s]+$", cand["text"])
+        eh_num_item_isolado = len(atual["text"]) <= 2 and atual["text"].isdigit()
+
+        if (
+            mesma_altura
+            and mesma_coluna
+            and not eh_rodape
+            and not eh_num_legenda_direita
+            and not eh_num_item_isolado
+            and abs(atual["rotation"] - cand["rotation"]) <= 1.0
+            and -4.0 <= gap_x <= 24.0
+            and not _existe_barreira_vertical_entre(r_esq, r_dir, barreiras_v)
+        ):
+            linhas_coalescidas[-1] = _mesclar_duas_linhas_horizontais(atual, cand)
+        else:
+            linhas_coalescidas.append(cand)
+
+    # Restaura a ordem próxima à sequência original de blocos após coalescer fragmentos inline
+    linhas_coalescidas.sort(key=lambda l: (l["block_idx"], l["rect"].y0, l["rect"].x0))
+    return linhas_coalescidas
 
 
 def _deve_unir_linhas(
     grupo_atual: List[Dict[str, Any]],
     prox_linha: Dict[str, Any],
-    barreiras: List[Tuple[float, float, float]],
+    barreiras_h: List[Tuple[float, float, float]],
+    barreiras_v: List[Tuple[float, float, float]],
 ) -> bool:
     """
     Decide se `prox_linha` pertence ao mesmo bloco textual (parágrafo, item de lista
-    ou seção do sumário) de `grupo_atual`.
+    ou item de definição) de `grupo_atual`.
     """
     ultima = grupo_atual[-1]
     r1: fitz.Rect = ultima["rect"]
@@ -345,74 +492,89 @@ def _deve_unir_linhas(
     if abs(ultima["rotation"] - prox_linha["rotation"]) > 1.0:
         return False
 
-    # 2. Nunca unir texto do corpo com rodapé (y > 560) ou se ambos no rodapé estiverem afastados
-    if (r1.y0 < 560.0 <= r2.y0) or (r1.y0 >= 560.0 and abs(r2.x0 - r1.x0) > 20.0):
+    # 2. Nunca unir texto do corpo com rodapé (y > 558) ou elementos afastados no rodapé
+    if (r1.y0 < 558.0 <= r2.y0) or (r1.y0 >= 558.0 and abs(r2.x0 - r1.x0) > 15.0):
         return False
 
-    # 3. Se houver uma linha horizontal de tabela/quadro entre as duas linhas, separa!
-    if _existe_barreira_entre(r1, r2, barreiras):
+    # 3. Se houver uma linha horizontal ou vertical de tabela/quadro entre as duas linhas, separa!
+    if _existe_barreira_horizontal_entre(r1, r2, barreiras_h):
         return False
-
-    # 4. Verifica distância vertical (deve fluir para baixo na mesma coluna)
-    gap_y = r2.y0 - r1.y1
-    altura_ref = max(r1.height, ultima["font_size"], 7.5)
-    if gap_y < -3.0 or gap_y > altura_ref * 1.45:
-        return False
-
-    # 5. Verifica se estão na mesma coluna horizontal
-    sobreposicao_x = min(r1.x1, r2.x1) - max(r1.x0, r2.x0)
-    deslocamento_x0 = r2.x0 - r1.x0
-    if sobreposicao_x < -5.0 and abs(deslocamento_x0) > 80.0:
-        return False
-
-    # 6. Se tamanho da fonte mudar drasticamente (> 1.2pt), é título vs corpo -> separa!
-    if abs(ultima["font_size"] - prox_linha["font_size"]) > 1.2:
-        return False
-
-    # 7. Se a cor mudar (ex.: título azul vs texto preto), separa!
-    if ultima["color_int"] != prox_linha["color_int"]:
+    if _existe_barreira_vertical_entre(r1, r2, barreiras_v):
         return False
 
     txt1 = ultima["text"].strip()
     txt2 = prox_linha["text"].strip()
 
-    # 8. Caso Sumário/Índice: cabeçalho de seção em negrito seguido de itens '– ...'
+    # 4. Campos de formulário com '___' (ex.: 'Dia___', 'Nome do cliente: ___') não se fundem a outros campos
+    if "___" in txt1 or "___" in txt2:
+        # Só une se a segunda linha for exclusivamente uma linha de sublinhados continuando o campo
+        if re.match(r"^_+$", txt2) and (r2.y0 - r1.y1) <= 2.5:
+            return True
+        return False
+
+    # 5. Verifica distância vertical máxima de entrelinha do mesmo parágrafo (~2.4pt para texto normal)
+    gap_y = r2.y0 - r1.y1
+    max_gap = max(2.4, ultima["font_size"] * 0.30)
+    if gap_y < -3.0 or gap_y > max_gap:
+        return False
+
+    # 6. Verifica se estão na mesma coluna horizontal
+    sobreposicao_x = min(r1.x1, r2.x1) - max(r1.x0, r2.x0)
+    deslocamento_x0 = r2.x0 - r1.x0
+    if sobreposicao_x < -2.0 or abs(deslocamento_x0) > 75.0:
+        return False
+
+    # 7. Diferença de tamanho de fonte ou cor (exceto quando envolve número/botão inline na linha)
+    if abs(ultima["font_size"] - prox_linha["font_size"]) > 1.2:
+        return False
+    if ultima["color_int"] != prox_linha["color_int"]:
+        return False
+
+    # 8. Continuação de item de Sumário/Índice quebrado em 2 linhas (ex.: '– Sistema de travamento e de partida sem' -> 'chave “Keyless Access” 66')
+    if txt1.startswith("– ") and not re.search(r"\b\d{1,3}$", txt1) and not txt2.startswith("– "):
+        if -1.0 <= deslocamento_x0 <= 15.0:
+            return True
+
+    # 9. Novo item de lista ('– ', '• ', '✓') ou item numerado inicia um novo bloco
+    if txt2.startswith(("– ", "• ", "✓")) or re.match(r"^\d+\.\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ]", txt2):
+        return False
+
+    # 10. Se no Sumário a linha atual já terminou com o número da página (ex.: '... 64'), não une com o próximo item
+    if txt1.startswith("– ") and re.search(r"\s\d{1,3}$", txt1):
+        return False
+
+    # 11. Tratamento de transição Negrito <-> Normal
     is_bold_1 = ultima["contador_estilos"]["bold"] > (ultima["total_peso"] * 0.5)
     is_bold_2 = prox_linha["contador_estilos"]["bold"] > (prox_linha["total_peso"] * 0.5)
 
-    # No índice (páginas 6 e 7), itens começam com '– ' e quebras de linha recuam ~8.5pt
-    if txt2.startswith("– ") and (txt1.startswith("– ") or (is_bold_1 and not txt1[-1].isdigit())):
-        if ultima["block_idx"] == prox_linha["block_idx"]:
-            return True
-
-    # Continuação de item de índice quebrado em 2 linhas (ex.: '– Sistema de travamento e de partida sem' -> 'chave “Keyless Access” 66')
-    if txt1.startswith("– ") and not re.search(r"\b\d{1,3}$", txt1) and not txt2.startswith("– "):
-        if 0.0 <= deslocamento_x0 <= 15.0:
-            return True
-
-    # Se a primeira linha for um título em negrito e a próxima for texto normal (ex.: 'Certificado de garantia...' ou 'Plano Digital de Serviços')
-    if is_bold_1 != is_bold_2 and not txt1.startswith("– "):
-        # Só une se a primeira linha terminar explicitamente no meio de uma palavra hifenizada
-        if not txt1.endswith("-"):
+    if is_bold_1 != is_bold_2:
+        # Permite unir quando é um item de definição com início em negrito que continua na linha abaixo
+        # (ex.: 'Tacômetro (conta-giros) (rotações x 1000' -> 'por minuto...' ou '-> Página 19.')
+        parenteses_abertos = txt1.count("(") > txt1.count(")")
+        continua_frase = (
+            txt1.endswith("-")
+            or parenteses_abertos
+            or txt2.startswith(("→", "Página"))
+            or (len(txt2) > 0 and txt2[0].islower())
+        )
+        if not continua_frase:
             return False
 
-    # 9. Novo item de lista ('– ' ou '• ') inicia um novo bloco se o bloco atual não for lista do Sumário
-    if (txt2.startswith("– ") or txt2.startswith("• ")) and not re.search(r"\s\d{1,3}$", txt2):
-        return False
-
-    # 10. Continuação de item de lista com recuo pendente (Hanging Indent: x0 avança ~8.5pt)
-    if (txt1.startswith("– ") or txt1.startswith("• ")) and (0.0 <= deslocamento_x0 <= 14.0):
+    # 12. Continuação de item de lista com recuo pendente (Hanging Indent: x0 avança até ~14pt)
+    if txt1.startswith(("– ", "• ", "✓")) and (0.0 <= deslocamento_x0 <= 14.5):
         return True
 
-    # 11. Linhas que já estavam no mesmo bloco nativo do PyMuPDF (e passaram nos filtros de barreira/estilo acima)
+    # 13. Linhas do mesmo bloco nativo que não terminaram em dois-pontos de cabeçalho (ex.: 'Região para:')
     if ultima["block_idx"] == prox_linha["block_idx"]:
+        if txt1.endswith(":"):
+            return False
         return True
 
-    # 12. Parágrafo centralizado ou justificado que foi quebrado pelo PyMuPDF (ex.: pág 2 'Para vendas dire-' -> 'tas, a garantia...')
+    # 14. Parágrafo centralizado ou justificado quebrado em blocos distintos pelo PyMuPDF (ex.: pág 2 e 'Observe ... na pági-\nna 17.')
     centro_1 = (r1.x0 + r1.x1) / 2.0
     centro_2 = (r2.x0 + r2.x1) / 2.0
     alinhado_centro = abs(centro_1 - centro_2) <= 6.0
-    alinhado_esq = abs(deslocamento_x0) <= 2.0
+    alinhado_esq = abs(deslocamento_x0) <= 2.5
 
     if (alinhado_centro or alinhado_esq) and not txt1.endswith((".", "!", ":", "?")):
         return True
@@ -429,18 +591,19 @@ def _extrair_textos_da_pagina(
 ) -> List[Dict[str, Any]]:
     """
     Extrai blocos de texto agrupados de forma inteligente:
-      - Separa células de tabela e títulos divididos por linhas horizontais.
-      - Reagrupa listas com recuo pendente (hanging indents) e parágrafos centralizados.
+      - Coalesce fragmentos horizontais separados por ícones/botões inline.
+      - Respeita barreiras horizontais e verticais de tabelas/quadros.
+      - Reagrupa listas com recuo pendente, itens de definição e parágrafos centralizados.
       - Atribui 'style' apenas quando predominante (>50% dos caracteres do bloco).
     """
-    barreiras = _obter_barreiras_horizontais(elementos_formas)
-    linhas = _extrair_linhas_atomicas(raw_dict)
+    barreiras_h, barreiras_v = _obter_barreiras(elementos_formas)
+    linhas = _extrair_linhas_atomicas(raw_dict, barreiras_v)
     if not linhas:
         return []
 
     grupos: List[List[Dict[str, Any]]] = [[linhas[0]]]
     for linha in linhas[1:]:
-        if _deve_unir_linhas(grupos[-1], linha, barreiras):
+        if _deve_unir_linhas(grupos[-1], linha, barreiras_h, barreiras_v):
             grupos[-1].append(linha)
         else:
             grupos.append([linha])
@@ -474,7 +637,6 @@ def _extrair_textos_da_pagina(
         tam_pred = contador_tamanhos.most_common(1)[0][0] if contador_tamanhos else None
         cor_pred = contador_cores.most_common(1)[0][0] if contador_cores else None
 
-        # Só inclui um estilo na lista 'style' se ele cobrir mais de 50% dos caracteres do bloco
         estilos_predominantes = sorted([
             est for est, qtd in contador_estilos.items()
             if qtd >= (peso_total_bloco * 0.5)
@@ -517,13 +679,12 @@ def _executar_ocr_em_imagem_pagina(
     """
     Executa OCR complementar em imagens grandes de conteúdo (como nas páginas 3 e 4)
     quando não há texto nativo extraído sobre a região da imagem.
-    Suporta RapidOCR, PyMuPDF Tesseract nativo ou pytesseract.
     """
     ib = img_elem["bbox"]
     img_rect = fitz.Rect(ib["x"], ib["y"], ib["x"] + ib["width"], ib["y"] + ib["height"])
     elementos_ocr: List[Dict[str, Any]] = []
 
-    # 1. Tenta RapidOCR (ONNX, leve e independente de binários do sistema)
+    # 1. Tenta RapidOCR (ONNX, leve e instalável via: pip install rapidocr-onnxruntime)
     try:
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
 
@@ -965,7 +1126,7 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
 
             raw_dict = page.get_text("dict")
 
-            # Extrai vetores/formas primeiro para usar as linhas horizontais como barreiras de texto
+            # Extrai vetores/formas primeiro para usar fios horizontais e verticais como barreiras de texto
             elementos_vetores_formas = _extrair_vetores_e_formas_da_pagina(
                 page, page_w, page_h, content_xref
             )
@@ -977,11 +1138,10 @@ def extrair_pdf_bruto(pdf_path: Path, output_dir: Path, file_sha256: Optional[st
             )
             elementos_links = _extrair_links_da_pagina(doc, page, page_w, page_h)
 
-            # Verifica se há imagens grandes rasterizadas sem texto nativo sobreposto (ex.: páginas 3 e 4)
+            # Fallback de OCR para imagens grandes rasterizadas sem texto nativo sobreposto (ex.: páginas 3 e 4)
             textos_ocr: List[Dict[str, Any]] = []
             for img_el in elementos_imagens:
                 nb = img_el["normalized_bbox"]
-                # Imagem dentro da página ocupando mais de 35% da área da página
                 if nb["x"] >= 0.0 and nb["y"] >= 0.0 and (nb["width"] * nb["height"]) >= 0.35:
                     ib = img_el["bbox"]
                     rect_img = fitz.Rect(ib["x"], ib["y"], ib["x"] + ib["width"], ib["y"] + ib["height"])
