@@ -22,6 +22,22 @@ raiz = {
             }
         },
     },
+    "dados_preparados": {
+        "path": _raiz / "dados_preparados",
+        "document_fase1": _raiz / "dados_preparados" / "document_fase1.jsonl",
+        "document_fase2": _raiz / "dados_preparados" / "document_fase2.jsonl",
+        "document_preparado": _raiz / "dados_preparados" / "document_preparado.jsonl",
+        "descricao_assets": _raiz / "dados_preparados" / "descricao_assets.jsonl",
+        "assets": {
+            "path": _raiz / "dados_preparados" / "assets",
+            "icons": _raiz / "dados_preparados" / "assets" / "icons",
+        },
+        "debug_visual": {
+            "path": _raiz / "dados_preparados" / "debug_visual",
+            "fase1_removidos": _raiz / "dados_preparados" / "debug_visual" / "debug_fase1_removidos.pdf",
+            "fase2_icones": _raiz / "dados_preparados" / "debug_visual" / "debug_fase2_icones.pdf",
+        }
+    }
 
 }
 
