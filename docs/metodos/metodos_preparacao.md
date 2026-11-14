@@ -86,9 +86,9 @@ Cada elemento de imagem recebe:
 - `image_path`: caminho relativo do arquivo principal em `assets/`.
 - `caption`: texto da legenda associada (ex.: `"Fig. 20 ..."`).
 - `legend_items`: lista ordenada dos itens explicativos numerados associados à figura (`"Legenda para → Fig. X"`), com os números de chamada já concatenados ao texto.
-- `description`: descrição da imagem obtida a partir de um documento JSON de descrições, no qual a chave é o número da imagem (`id_image`) e o valor é a descrição correspondente.
+- `description`: descrição da imagem obtida a partir do arquivo `descricao_images.json`, no qual a chave é o número da imagem (`id_image`) e o valor é a descrição correspondente.
 
-O documento JSON de descrições deve seguir o formato:
+O arquivo `descricao_images.json` deve seguir o formato:
 
 ```json
 {
@@ -108,12 +108,15 @@ Antes do descarte final das coordenadas geométricas, é gerado o arquivo `debug
 ## 3. Estrutura de Armazenamento
 
 ```text
-documento_preparado/
+dados_preparados/
+├── document_fase1.jsonl
+├── document_fase2.jsonl
 ├── document_preparado.jsonl
-├── image_descriptions.json
 ├── icons_catalog.json
+├── descricao_images.json
 ├── assets/
-│   ├── asset_000001.jpeg
+│   ├── asset_000001.png
+│   ├── asset_000002.jpeg
 │   ├── ...
 │   └── icons/
 │       ├── icon_0001.png

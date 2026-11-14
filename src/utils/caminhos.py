@@ -28,7 +28,7 @@ raiz = {
         "document_fase2": _raiz / "dados_preparados" / "document_fase2.jsonl",
         "icons_catalog": _raiz / "dados_preparados" / "icons_catalog.json",
         "document_preparado": _raiz / "dados_preparados" / "document_preparado.jsonl",
-        "descricao_images": _raiz / "dados_preparados" / "descricao_images.jsonl",
+        "descricao_images": _raiz / "dados_preparados" / "descricao_images.json",
         "assets": {
             "path": _raiz / "dados_preparados" / "assets",
             "icons": _raiz / "dados_preparados" / "assets" / "icons",
