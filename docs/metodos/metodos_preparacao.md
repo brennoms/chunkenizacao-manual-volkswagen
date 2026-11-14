@@ -41,12 +41,32 @@ Agrupa primitivas gráficas sobrepostas que formam um único símbolo visual e a
    - A região do `bbox` de cada ícone consolidado é recortada da página renderizada e submetida a um cálculo de **Hash Perceptual (`pHash` de 64 bits)**. A distância de Hamming é usada para aceitar pequenas variações de rasterização, em conjunto com a cor predominante e a proporção do `bbox`.
    - Cada ocorrência de ícone recebe um `icon_order_id` inteiro sequencial global, começando em `1` no primeiro ícone do PDF e incrementando a cada instância, mesmo quando o ícone é igual a outro.
    - Ícones visualmente equivalentes recebem o mesmo `icon_id` global (ex.: `icon_0001`), gerando uma única imagem de referência em `assets/icons/icon_0001.png` e um registro no catálogo `icons_catalog.json`. Portanto, `icon_id` identifica o modelo visual compartilhado, enquanto `icon_order_id` identifica a instância no PDF.
+   - O dicionário `ICONES_SEMELHANTES_MANUAIS`, no início de `src/preparacao/fase2.py`, permite informar grupos de ocorrências semelhantes manualmente, usando o `icon_order_id` mostrado na matriz de paridade. Os itens de cada grupo e quaisquer ocorrências visualmente semelhantes a eles recebem o mesmo `icon_id`.
 4. **Classificação Posicional do Ícone:**
    - **Inline (`inline`):** ícones contidos na faixa vertical de uma linha de texto são convertidos na marcação `<icon:icon_XXXX>` diretamente dentro da string de texto do parágrafo.
    - **Bloco/Coluna (`standalone`):** ícones isolados (como em colunas de tabelas de luzes de advertência ou cabeçalhos de alerta) são vinculados diretamente à estrutura pai (célula da tabela ou caixa de alerta).
 
+#### Captura e reutilização dos ícones
+
+O processamento é controlado pela flag `BUSCAR_ICONES`, definida no início de
+`src/preparacao/fase2.py`:
+
+- `BUSCAR_ICONES = True`: renderiza cada ocorrência encontrada e salva a captura
+  em `assets/all_icons/icon_XXXX.png`, usando o `icon_order_id` como ordem do
+  arquivo. Também atualiza as imagens deduplicadas em `assets/icons/` e a matriz
+  de paridade.
+- `BUSCAR_ICONES = False`: não renderiza o PDF. Carrega as capturas existentes
+  em `assets/all_icons/` pela ordem de `icon_order_id` e executa normalmente o
+  cálculo de pHash, a comparação, o agrupamento, a deduplicação e a matriz de
+  paridade.
+
+A primeira execução deve ser feita com a flag habilitada para criar
+`assets/all_icons/`. Execuções posteriores podem desabilitá-la para reutilizar
+as capturas sem gerar novos recortes. Se uma captura esperada não existir, o
+processamento é interrompido para evitar comparações incompletas.
+
 #### Homologação Visual da Fase 2
-Geração do arquivo `debug_visual/debug_fase2_icones.pdf`, demarcando cada ícone consolidado com uma caixa única e seu respectivo `icon_id` compartilhado.
+Geração do arquivo `debug_visual/debug_fase2_icones.pdf`, demarcando cada ícone consolidado com uma caixa única e seu respectivo `icon_id` compartilhado. A matriz de paridade exibe o `icon_order_id` acima de cada ocorrência para facilitar a configuração dos grupos manuais.
 
 ---
 
@@ -119,6 +139,10 @@ dados_preparados/
 │   ├── asset_000001.png
 │   ├── asset_000002.jpeg
 │   ├── ...
+│   ├── all_icons/
+│   │   ├── icon_0001.png
+│   │   ├── icon_0002.png
+│   │   └── ...
 │   ├── icons/
 │       ├── icon_0001.png
 │       ├── icon_0002.png
