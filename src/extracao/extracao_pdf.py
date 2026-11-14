@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pymupdf as fitz  # PyMuPDF
 
+from ..utils.funcoes import calcular_hash_sha256
+
 EXTRACTOR_VERSION = "1.0.0"
 SCHEMA_VERSION = "1.0.0"
 
