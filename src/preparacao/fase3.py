@@ -15,7 +15,6 @@ import pymupdf as fitz
 LIMITE_COLUNA_X = 210.0
 LARGURA_ZONA_INTEIRA = 215.0
 TOLERANCIA_GEOMETRICA = 2.0
-TOLERANCIA_LINHA_Y = 3.5
 
 NIVEIS_ALERTA = ("PERIGO", "ATENÇÃO", "CUIDADO", "NOTA", "AMBIENTAL", "INFO")
 REGEX_CABECALHO_ALERTA = re.compile(
@@ -26,9 +25,10 @@ REGEX_ITEM_LISTA = re.compile(
     r"^\s*(?:([•●▪◦‣⁃✓✔–—-])|(\d+[.)]))\s+(.+)$",
     re.DOTALL,
 )
+REGEX_ITEM_BULLET_ALERTA = re.compile(r"^\s*[•●▪◦‣⁃]\s+(.+)$", re.DOTALL)
 REGEX_FIGURA = re.compile(r"\bFig\.?\s*(\d+)\b", re.IGNORECASE)
 REGEX_LEGENDA_FIGURA = re.compile(
-    r"^(?:Legenda|Explicaç(?:ões|ão)\s+sobre\s+os\s+instrumentos)\s*(?:para\s*)?→?\s*Fig\.?\s*(\d+)",
+    r"^(?:(?:<icon:icon_\d+>\s*)*)(?:Legenda|Explicaç(?:ões|ão)\s+sobre\s+os\s+instrumentos)\s*(?:para\s*)?→?\s*Fig\.?\s*(\d+)",
     re.IGNORECASE,
 )
 REGEX_PAGINA = re.compile(r"(?:página|pág\.?)\s*(\d+)", re.IGNORECASE)
@@ -112,7 +112,11 @@ def _caixa_contem(
 
 def _texto_limpo(elemento: Dict[str, Any]) -> str:
     bruto = str(elemento.get("content") or "")
-    sem_hifen_quebra = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", bruto)
+    sem_hifen_quebra = re.sub(
+        r"([a-záéíóúâêôãõçA-ZÁÉÍÓÚÂÊÔÃÕÇ])-\s*\n\s*([a-záéíóúâêôãõç])",
+        r"\1\2",
+        bruto,
+    )
     return re.sub(r"\s+", " ", sem_hifen_quebra).strip()
 
 
@@ -129,6 +133,12 @@ def _fontes_do_elemento(elemento: Dict[str, Any]) -> List[str]:
     return [str(elemento["id"])] if elemento.get("id") else []
 
 
+def _fontes_reais(elemento: Dict[str, Any]) -> List[str]:
+    if "_source_id_real" in elemento:
+        return [str(elemento["_source_id_real"])]
+    return _fontes_do_elemento(elemento)
+
+
 def _carregar_json_auxiliar(caminho: Optional[Path]) -> Dict[str, Any]:
     if caminho is None or not caminho.exists():
         return {}
@@ -136,24 +146,26 @@ def _carregar_json_auxiliar(caminho: Optional[Path]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Pré-processamento: Divisão de elementos que cruzam colunas no Índice
+# Pré-processamento: Divisão de textos transversais, números empilhados e listas
 # ---------------------------------------------------------------------------
 
-def _desmembrar_textos_transversais_indice(
+def _normalizar_textos_pagina(
     textos: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    No Índice (ex.: pág. 7), o PDF ocasionalmente junta o número de página do
-    final da coluna esquerda (x ~ 202) com o item da coluna direita (x ~ 229),
-    ex.: '194 – Orientações sobre os dados técnicos 281'. Divide-os em dois.
+    1. Divide elementos de texto do Índice que atravessam da coluna esquerda
+       para a coluna direita.
+    2. Divide blocos de números de página empilhados verticalmente (ex: '10\\n11',
+       '112\\n141') para que cada número se una ao seu respectivo item.
+    3. Divide blocos de texto que contêm múltiplos itens de checklist/lista.
     """
-    resultado: List[Dict[str, Any]] = []
     padrao_duplo = re.compile(r"^(\d{1,3})\s+((?:[–—-]\s*.+|[A-ZÁÉÍÓÚÂÊÔÃÕÇ].+))$")
+    intermediarios: List[Dict[str, Any]] = []
 
     for txt in textos:
         x0, y0, x1, y1 = _bbox(txt)
         conteudo = _texto_limpo(txt)
-        if 180.0 <= x0 <= 212.0 and x1 >= 250.0:
+        if 180.0 <= x0 <= 215.0 and x1 >= 245.0:
             match = padrao_duplo.match(conteudo)
             if match:
                 num_esq, texto_dir = match.group(1), match.group(2)
@@ -173,16 +185,75 @@ def _desmembrar_textos_transversais_indice(
                     "width": max(20.0, x1 - 229.6),
                     "height": y1 - y0,
                 }
-                resultado.extend([esq, dir_el])
+                intermediarios.extend([esq, dir_el])
                 continue
-        resultado.append(txt)
+        intermediarios.append(txt)
+
+    resultado: List[Dict[str, Any]] = []
+    regex_quebra_marcador = re.compile(r"\n(?=\s*(?:[✓✔•●▪–—-]\s+|\d+\.\s+))")
+    regex_quebra_frases_checklist = re.compile(r"(?<=[.!?])\s*\n\s*(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])")
+
+    for txt in intermediarios:
+        bruto = str(txt.get("content") or "").strip()
+        x0, y0, x1, y1 = _bbox(txt)
+        id_real = str(txt.get("_source_id_real") or txt["id"])
+
+        # Caso 1: Números de página empilhados verticalmente (ex: "10\n11", "112\n141")
+        linhas_num = [ln.strip() for ln in bruto.splitlines() if ln.strip()]
+        if (
+            len(linhas_num) >= 2
+            and (175.0 <= x0 <= 215.0 or x0 >= 350.0)
+            and all(re.fullmatch(r"\d{1,3}(?:\s*,\s*\d{1,3})*", ln) for ln in linhas_num)
+        ):
+            altura_total = max(1.0, y1 - y0)
+            passo_y = altura_total / len(linhas_num)
+            for idx, ln in enumerate(linhas_num):
+                sub = dict(txt)
+                sub["id"] = f"{txt['id']}__N{idx + 1}"
+                sub["_source_id_real"] = id_real
+                sub["content"] = ln
+                sub["bbox"] = {
+                    "x": x0,
+                    "y": round(y0 + idx * passo_y, 2),
+                    "width": x1 - x0,
+                    "height": round(passo_y, 2),
+                }
+                resultado.append(sub)
+            continue
+
+        # Caso 2: Múltiplos itens de lista ou checklist no mesmo bloco
+        partes = regex_quebra_marcador.split(bruto)
+        eh_checklist_impl = False
+        if len(partes) <= 1:
+            candidatas = regex_quebra_frases_checklist.split(bruto)
+            if len(candidatas) >= 3:
+                partes = candidatas
+                eh_checklist_impl = True
+
+        if len(partes) <= 1:
+            resultado.append(txt)
+            continue
+
+        altura_total = max(1.0, y1 - y0)
+        passo_y = altura_total / len(partes)
+
+        for idx, parte in enumerate(partes):
+            sub = dict(txt)
+            sub["id"] = f"{txt['id']}__P{idx + 1}"
+            sub["_source_id_real"] = id_real
+            texto_parte = parte.strip()
+            if eh_checklist_impl and not REGEX_ITEM_LISTA.match(texto_parte):
+                texto_parte = f"✓ {texto_parte}"
+            sub["content"] = texto_parte
+            sub["bbox"] = {
+                "x": x0,
+                "y": round(y0 + idx * passo_y, 2),
+                "width": x1 - x0,
+                "height": round(passo_y, 2),
+            }
+            resultado.append(sub)
+
     return resultado
-
-
-def _fontes_reais(elemento: Dict[str, Any]) -> List[str]:
-    if "_source_id_real" in elemento:
-        return [str(elemento["_source_id_real"])]
-    return _fontes_do_elemento(elemento)
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +267,11 @@ def _eh_titulo_sumario_ou_chamada(texto: str) -> bool:
         return True
     if REGEX_CHAMADA_ALERTA.match(texto) and "página" in texto.lower():
         return True
-    if re.match(r"^[–—•●▪]\s*", texto):
+    if re.match(r"^[–—•●▪✓✔]\s*", texto):
         return True
     if re.match(r"^[_.\s]{4,}", texto):
+        return True
+    if re.fullmatch(r"[\d,\s]+", texto):
         return True
     return False
 
@@ -218,10 +291,10 @@ def _classificar_nivel_titulo(
 
     fonte = str(elemento.get("font") or "").lower()
     tamanho = float(elemento.get("font_size") or 0.0)
-    cor = (elemento.get("color") or {}).get("components") or []
-    eh_azul = len(cor) >= 3 and cor[2] >= 130 and cor[0] < 50 and cor[1] < 150
 
-    # Nível 1: Títulos de capítulo (VWHead-Bold >= 13pt, exceto capa na pág. 1)
+    if "introdução ao tema" in conteudo.lower():
+        return 3
+
     if "vwhead-bold" in fonte and tamanho >= 13.0 and num_pagina > 1:
         return 1
 
@@ -233,17 +306,14 @@ def _classificar_nivel_titulo(
         and _largura(sh) >= 140.0
         for sh in shapes_pagina
     )
-    # Nível 2: Seções principais
     if ("vwhead-bold" in fonte and 10.5 <= tamanho < 13.0) or (
         em_faixa_destaque and "bold" in fonte and 9.0 <= tamanho < 13.0
     ):
         return 2
 
-    # Nível 3: Subseções
     if "vwhead-bold" in fonte and 8.5 <= tamanho < 10.5:
         return 3
 
-    # Nível 4: Tópico local em negrito isolado
     if (
         "vwtext-bold" in fonte
         and 7.3 <= tamanho <= 8.2
@@ -282,7 +352,7 @@ def _associar_icones_aos_textos(
         ix0, iy0, ix1, iy1 = _bbox(icone)
         icx, icy = (ix0 + ix1) / 2.0, (iy0 + iy1) / 2.0
         largura_ic, altura_ic = ix1 - ix0, iy1 - iy0
-        if largura_ic > 32.0 or altura_ic > 26.0:
+        if largura_ic > 35.0 or altura_ic > 28.0:
             continue
 
         melhor_texto: Optional[Dict[str, Any]] = None
@@ -290,20 +360,19 @@ def _associar_icones_aos_textos(
 
         for txt in textos:
             tx0, ty0, tx1, ty1 = _bbox(txt)
-            # Verifica alinhamento vertical com o bloco de texto
-            if not (ty0 - 4.5 <= icy <= ty1 + 4.5):
+            if re.fullmatch(r"[\d,\s]+", _texto_limpo(txt)):
                 continue
-            # Mesma coluna (quando o texto não atravessa a página)
+            if not (ty0 - 6.0 <= icy <= ty1 + 6.0):
+                continue
             if _largura(txt) <= LARGURA_ZONA_INTEIRA:
                 if (icx < LIMITE_COLUNA_X) != (((tx0 + tx1) / 2.0) < LIMITE_COLUNA_X):
                     continue
-            # Aceita ícone dentro do texto ou até 32pt à esquerda/direita (ex: círculos 1..8)
-            if not (tx0 - 32.0 <= icx <= tx1 + 28.0):
+            if not (tx0 - 38.0 <= icx <= tx1 + 32.0):
                 continue
 
             dist_x = 0.0 if tx0 <= icx <= tx1 else min(abs(icx - tx0), abs(icx - tx1))
-            dist_y = abs(icy - (ty0 + ty1) / 2.0)
-            dist = dist_x + dist_y * 1.5
+            dist_y = abs(iy0 - ty0) if icx < tx0 else abs(icy - (ty0 + ty1) / 2.0)
+            dist = dist_x * 0.6 + dist_y * 2.5
             if dist < menor_distancia:
                 menor_distancia = dist
                 melhor_texto = txt
@@ -406,7 +475,6 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
         banda = retangulos[0] if retangulos else None
 
         fonte = str(txt.get("font") or "").lower()
-        # Exige que o cabeçalho de alerta seja negrito e que não seja uma frase comum como "Perigo de uma postura..."
         if "bold" not in fonte:
             continue
         if resto_texto and resto_texto[0].islower():
@@ -421,7 +489,6 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
         hx0, hy0, hx1, hy1 = _bbox(head)
         eh_col_esquerda = ((hx0 + hx1) / 2.0) < LIMITE_COLUNA_X
 
-        # Limites laterais completos da coluna (pois em NOTA a banda começa à direita do ícone)
         col_x0 = 18.0 if eh_col_esquerda else LIMITE_COLUNA_X + 2.0
         col_x1 = LIMITE_COLUNA_X - 2.0 if eh_col_esquerda else 405.0
 
@@ -432,7 +499,6 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
         else:
             bx0, by0, bx1, by1 = col_x0, hy0 - 4.0, col_x1, hy1 + 4.0
 
-        # Teto vertical máximo dado pelo próximo alerta ou título na mesma coluna
         y_max_coluna = altura_pag - 24.0
         for outro_txt in textos:
             if outro_txt["id"] == head["id"]:
@@ -444,16 +510,17 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
             if not mesma_col and _largura(outro_txt) <= LARGURA_ZONA_INTEIRA:
                 continue
             outro_limpo = _texto_limpo(outro_txt)
+            m_outro = REGEX_CABECALHO_ALERTA.match(outro_limpo)
             eh_outro_alerta = bool(
-                REGEX_CABECALHO_ALERTA.match(outro_limpo)
+                m_outro
                 and "bold" in str(outro_txt.get("font") or "").lower()
-                and not (REGEX_CABECALHO_ALERTA.match(outro_limpo).group(2).strip()[:1].islower())
+                and not (m_outro.group(2).strip()[:1].islower())
             )
             eh_titulo = _classificar_nivel_titulo(outro_txt, shapes, int(pagina["page"])) in (1, 2, 3)
-            if eh_outro_alerta or eh_titulo:
+            eh_chamada_cap = bool(REGEX_CHAMADA_ALERTA.match(outro_limpo) and "página" in outro_limpo.lower())
+            if eh_outro_alerta or eh_titulo or eh_chamada_cap:
                 y_max_coluna = min(y_max_coluna, oy0 - 2.0)
 
-        # Procura linha horizontal inferior de fechamento do quadro na mesma coluna
         linhas_fechamento: List[float] = []
         for sh in shapes:
             if sh.get("shape_type") != "line":
@@ -461,13 +528,13 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
             lx0, ly0, lx1, ly1 = _bbox(sh)
             if abs(ly1 - ly0) <= 1.5 and 120.0 <= (lx1 - lx0) <= 200.0:
                 mesma_col_linha = (((lx0 + lx1) / 2.0) < LIMITE_COLUNA_X) == eh_col_esquerda
-                if mesma_col_linha and (by1 + 6.0 <= ly0 <= y_max_coluna + 5.0):
+                if mesma_col_linha and (by1 + 14.0 <= ly0 <= y_max_coluna + 5.0):
                     linhas_fechamento.append((ly0 + ly1) / 2.0)
 
         if linhas_fechamento:
             y_fechamento = min(linhas_fechamento)
         else:
-            y_fechamento = min(y_max_coluna, by1 + 165.0)
+            y_fechamento = min(y_max_coluna, by1 + 220.0)
 
         quadro = (min(bx0, col_x0), by0 - 2.0, max(bx1, col_x1), y_fechamento)
 
@@ -475,14 +542,11 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
         for txt in textos:
             if txt["id"] == head["id"]:
                 continue
-            tb = _bbox(txt)
             tcx, tcy = _centro(txt)
             if quadro[0] - 6.0 <= tcx <= quadro[2] + 6.0 and hy0 - 2.0 <= tcy <= quadro[3] + 3.0:
-                # Não absorve parágrafo de nota informativa com ícone 'i' fora do quadro
                 membros_texto.append(txt)
         membros_texto.sort(key=lambda e: (round(_bbox(e)[1], 1), _bbox(e)[0]))
 
-        # Ícone do cabeçalho (busca na faixa do cabeçalho, inclusive à esquerda da banda de NOTA)
         icones_cabecalho = [
             ic for ic in icones
             if (quadro[0] - 8.0 <= _centro(ic)[0] <= quadro[2] + 8.0)
@@ -542,7 +606,11 @@ def _detectar_alertas_pagina(pagina: Dict[str, Any]) -> List[Dict[str, Any]]:
             if ic.get("icon_id") and ic.get("icon_id") != icon_id_principal
         )
 
-        todas_caixas = [_bbox(head)] + [_bbox(m) for m in membros_texto] + [_bbox(ic) for ic in icones_internos]
+        todas_caixas = (
+            [_bbox(head)]
+            + [_bbox(m) for m in membros_texto]
+            + [_bbox(ic) for ic in icones_internos]
+        )
         if banda is not None:
             todas_caixas.append(_bbox(banda))
 
@@ -579,21 +647,72 @@ def _agrupar_coordenadas(valores: Sequence[float], tolerancia: float = 2.5) -> L
     return [sum(g) / len(g) for g in grupos]
 
 
+def _inferir_divisoria_colunas_por_texto(
+    elementos: Sequence[Dict[str, Any]],
+    gx0: float,
+    gy0: float,
+    gx1: float,
+    gy1: float,
+    ids_excluidos: set[str],
+) -> List[float]:
+    """Infere divisória vertical única em tabelas sem fios verticais ('Símbolo | Significado')."""
+    for el in elementos:
+        if el.get("type") == "text" and _texto_limpo(el).lower().startswith("significado"):
+            ecx, ecy = _centro(el)
+            if gx0 <= ecx <= gx1 and gy0 - 4.0 <= ecy <= gy1 + 4.0:
+                return [_bbox(el)[0] - 4.0]
+
+    xs_inicio: List[float] = []
+    for el in elementos:
+        if el.get("type") not in {"text", "icon"}:
+            continue
+        if str(el.get("id")) in ids_excluidos:
+            continue
+        ecx, ecy = _centro(el)
+        if gx0 - 2.0 <= ecx <= gx1 + 2.0 and gy0 - 2.0 <= ecy <= gy1 + 2.0:
+            x0_el = _bbox(el)[0]
+            if gx0 + 18.0 <= x0_el <= gx1 - 25.0:
+                xs_inicio.append(x0_el)
+
+    clusters_x = _agrupar_coordenadas(xs_inicio, tolerancia=6.0)
+    divisorias: List[float] = []
+    for cx in clusters_x:
+        contagem = sum(1 for x in xs_inicio if abs(x - cx) <= 6.0)
+        if contagem >= 2:
+            divisorias.append(cx - 3.0)
+    return divisorias[:1]
+
+
 def _detectar_tabelas_pagina(
     pagina: Dict[str, Any],
     caixas_alertas: Sequence[Tuple[float, float, float, float]],
     ids_textos_excluidos: set[str],
 ) -> List[Dict[str, Any]]:
     """
-    Reconstrói tabelas estritamente a partir de grades de linhas (`shape_type == 'line'`),
-    mantendo tabelas da coluna esquerda separadas das tabelas da coluna direita.
+    Reconstrói tabelas por grades de linhas horizontais e verticais, protegendo
+    legendas de figuras ('Legenda para -> Fig. X') e faixas de título ('Menu de Serviços').
     """
     elementos = pagina.get("elements", [])
+    shapes = [e for e in elementos if e.get("type") == "shape"]
+    textos = [e for e in elementos if e.get("type") == "text"]
+
+    # Calcula zonas Y ocupadas por "Legenda para -> Fig. X" para não confundi-las com tabelas
+    zonas_legenda_y: List[Tuple[float, float]] = []
+    for txt in textos:
+        if REGEX_LEGENDA_FIGURA.match(_texto_limpo(txt)):
+            y_ini = _bbox(txt)[1] - 4.0
+            y_fim = float(pagina.get("height", 595.28)) - 25.0
+            for outro in textos:
+                oy0 = _bbox(outro)[1]
+                if oy0 > y_ini + 12.0 and _classificar_nivel_titulo(outro, shapes, int(pagina["page"])) in (1, 2, 3):
+                    y_fim = min(y_fim, oy0 - 2.0)
+            zonas_legenda_y.append((y_ini, y_fim))
+
     shapes_linha = [
-        e for e in elementos
-        if e.get("type") == "shape"
-        and e.get("shape_type") == "line"
+        e for e in shapes
+        if e.get("shape_type") == "line"
         and not any(_caixa_contem(alerta_box, _bbox(e), margem=3.0) for alerta_box in caixas_alertas)
+        and not any(y0_leg <= _centro(e)[1] <= y1_leg for y0_leg, y1_leg in zonas_legenda_y)
     ]
 
     linhas_h: List[Tuple[float, float, float, str]] = []
@@ -606,11 +725,42 @@ def _detectar_tabelas_pagina(
         elif abs(sx1 - sx0) <= 1.5 and (sy1 - sy0) >= 9.0:
             linhas_v.append(((sx0 + sx1) / 2.0, sy0, sy1, str(sh["id"])))
 
-    if len(linhas_h) < 3 or len(linhas_v) < 2:
+    # Retângulos de cabeçalho de tabela ("Símbolo | Significado" na pág. 16)
+    for sh in shapes:
+        if sh.get("shape_type") != "rectangle":
+            continue
+        rx0, ry0, rx1, ry1 = _bbox(sh)
+        if (rx1 - rx0) >= 140.0 and 10.0 <= (ry1 - ry0) <= 28.0:
+            textos_no_ret = [
+                _texto_limpo(t)
+                for t in textos
+                if _caixa_contem((rx0, ry0, rx1, ry1), _bbox(t), margem=3.0)
+            ]
+            # Exige que tenha >= 2 colunas de cabeçalho (ex: "Símbolo" e "Significado")
+            if len(textos_no_ret) >= 2 and any(
+                t.lower() in {"símbolo", "menu", "categoria de peso"} for t in textos_no_ret
+            ):
+                linhas_h.append((ry0, rx0, rx1, str(sh["id"])))
+                linhas_h.append((ry1, rx0, rx1, str(sh["id"])))
+                tem_fio_abaixo = any(
+                    ry1 + 8.0 <= y_fio <= ry1 + 95.0
+                    and max(x0_f, rx0) < min(x1_f, rx1)
+                    for y_fio, x0_f, x1_f, _ in linhas_h
+                )
+                if not tem_fio_abaixo:
+                    ys_abaixo = [
+                        _bbox(el)[3]
+                        for el in elementos
+                        if el.get("type") in {"text", "icon"}
+                        and rx0 <= _centro(el)[0] <= rx1
+                        and ry1 + 2.0 <= _centro(el)[1] <= ry1 + 70.0
+                    ]
+                    if ys_abaixo:
+                        linhas_h.append((max(ys_abaixo) + 3.0, rx0, rx1, str(sh["id"])))
+
+    if len(linhas_h) < 3:
         return []
 
-    # 1. Agrupa linhas horizontais por Y, mas só une segmentos que se tocam (tolerância 4pt)
-    # Isso impede unir uma tabela na coluna esquerda com outra na coluna direita!
     linhas_h.sort(key=lambda item: (item[0], item[1]))
     grupos_por_y: List[List[Tuple[float, float, float, str]]] = []
     for seg in linhas_h:
@@ -637,24 +787,33 @@ def _detectar_tabelas_pagina(
     if len(faixas_horizontais) < 3:
         return []
 
-    # 2. Agrupa faixas horizontais que pertencem à mesma tabela (mesmo intervalo X e conectadas por linhas V)
     grupos_grade: List[List[Dict[str, Any]]] = []
     for faixa in sorted(faixas_horizontais, key=lambda f: (f["y"], f["x0"])):
         melhor_grupo: Optional[List[Dict[str, Any]]] = None
         for grupo in grupos_grade:
             ultima = grupo[-1]
-            # Devem ter quase os mesmos limites X0 e X1
-            if abs(faixa["x0"] - ultima["x0"]) > 15.0 or abs(faixa["x1"] - ultima["x1"]) > 15.0:
+            gx0_grupo = min(f["x0"] for f in grupo)
+            gx1_grupo = max(f["x1"] for f in grupo)
+
+            mesma_largura = abs(faixa["x0"] - gx0_grupo) <= 15.0 and abs(faixa["x1"] - gx1_grupo) <= 15.0
+            fio_parcial_interno = (
+                (gx1_grupo - gx0_grupo) > LARGURA_ZONA_INTEIRA
+                and faixa["x0"] >= gx0_grupo - 5.0
+                and abs(faixa["x1"] - gx1_grupo) <= 15.0
+            )
+            if not (mesma_largura or fio_parcial_interno):
                 continue
-            if (faixa["y"] - ultima["y"]) > 85.0:
+            if (faixa["y"] - ultima["y"]) > 145.0:
                 continue
+
             tem_conexao_v = any(
-                min(faixa["x0"], ultima["x0"]) - 3.0 <= vx <= max(faixa["x1"], ultima["x1"]) + 3.0
+                gx0_grupo - 3.0 <= vx <= gx1_grupo + 3.0
                 and vy0 <= faixa["y"] + 3.0
                 and vy1 >= ultima["y"] - 3.0
                 for vx, vy0, vy1, _ in linhas_v
             )
-            if tem_conexao_v:
+            eh_pagina_indice = int(pagina["page"]) in (6, 7)
+            if tem_conexao_v or (not eh_pagina_indice and (faixa["y"] - ultima["y"]) <= 75.0):
                 melhor_grupo = grupo
                 break
         if melhor_grupo is not None:
@@ -663,6 +822,8 @@ def _detectar_tabelas_pagina(
             grupos_grade.append([faixa])
 
     tabelas_reconstruidas: List[Dict[str, Any]] = []
+    elementos_ja_em_tabela: set[str] = set()
+
     for grupo in grupos_grade:
         ys_distintos = _agrupar_coordenadas([f["y"] for f in grupo], tolerancia=2.5)
         if len(ys_distintos) < 3:
@@ -670,7 +831,7 @@ def _detectar_tabelas_pagina(
         gx0 = min(f["x0"] for f in grupo)
         gx1 = max(f["x1"] for f in grupo)
         gy0, gy1 = min(ys_distintos), max(ys_distintos)
-        if (gx1 - gx0) < 65.0 or (gy1 - gy0) < 24.0:
+        if (gx1 - gx0) < 65.0 or (gy1 - gy0) < 20.0:
             continue
 
         v_internas = [
@@ -679,10 +840,17 @@ def _detectar_tabelas_pagina(
             if gx0 - 3.0 <= vx <= gx1 + 3.0
             and max(vy0, gy0 - 2.0) < min(vy1, gy1 + 2.0)
         ]
-        xs_cols = _agrupar_coordenadas([gx0, gx1] + [vx for vx, _ in v_internas], tolerancia=3.0)
+        xs_candidatos = [gx0, gx1] + [vx for vx, _ in v_internas]
+        xs_cols = _agrupar_coordenadas(xs_candidatos, tolerancia=3.0)
+
+        if len(xs_cols) < 3:
+            inferidas = _inferir_divisoria_colunas_por_texto(
+                elementos, gx0, gy0, gx1, gy1, ids_textos_excluidos | elementos_ja_em_tabela
+            )
+            xs_cols = _agrupar_coordenadas([gx0, gx1] + inferidas, tolerancia=5.0)
+
         colunas = [(xa, xb) for xa, xb in zip(xs_cols, xs_cols[1:]) if (xb - xa) >= 14.0]
         linhas_tab = [(ya, yb) for ya, yb in zip(ys_distintos, ys_distintos[1:]) if (yb - ya) >= 6.0]
-        # Exige pelo menos 2 colunas reais (portanto pelo menos 1 divisória vertical interna)
         if len(colunas) < 2 or len(linhas_tab) < 2:
             continue
 
@@ -701,7 +869,12 @@ def _detectar_tabelas_pagina(
                 for el in elementos:
                     if el.get("type") not in {"text", "icon"}:
                         continue
-                    if str(el.get("id")) in ids_textos_excluidos or str(el.get("id")) in elementos_consumidos_ids:
+                    eid = str(el.get("id"))
+                    if (
+                        eid in ids_textos_excluidos
+                        or eid in elementos_consumidos_ids
+                        or eid in elementos_ja_em_tabela
+                    ):
                         continue
                     ecx, ecy = _centro(el)
                     if xa - 1.5 <= ecx <= xb + 1.5 and ya - 1.5 <= ecy <= yb + 1.5:
@@ -711,6 +884,7 @@ def _detectar_tabelas_pagina(
                 partes_celula: List[str] = []
                 for item in itens_celula:
                     elementos_consumidos_ids.add(str(item["id"]))
+                    elementos_ja_em_tabela.add(str(item["id"]))
                     fontes_tabela.extend(_fontes_do_elemento(item))
                     if item["type"] == "text":
                         partes_celula.append(_texto_limpo(item))
@@ -753,6 +927,67 @@ def _detectar_tabelas_pagina(
 
 
 # ---------------------------------------------------------------------------
+# Pareamento de números de página à direita (Índice e Legendas de Figuras)
+# ---------------------------------------------------------------------------
+
+def _unificar_numeros_pagina_na_pagina(blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Pareia cada bloco numérico de página à direita (ex: '68', '85, 208', '141')
+    com o parágrafo da mesma linha horizontal cujos limites Y melhor coincidem.
+    """
+    consumidos: set[int] = set()
+
+    for idx, bloco in enumerate(blocos):
+        if bloco.get("type") != "paragraph":
+            continue
+        texto = bloco.get("content", "").strip()
+        if not re.fullmatch(r"\d{1,3}(?:\s*,\s*\d{1,3})*", texto):
+            continue
+
+        bx0, by0, bx1, by1 = _bbox(bloco)
+        bcy = (by0 + by1) / 2.0
+        if not (175.0 <= bx0 <= 215.0 or bx0 >= 350.0):
+            continue
+
+        melhor_alvo: Optional[Dict[str, Any]] = None
+        menor_desvio_y = float("inf")
+
+        for j, cand in enumerate(blocos):
+            if j == idx or j in consumidos or cand.get("type") != "paragraph":
+                continue
+            if re.fullmatch(r"\d{1,3}(?:\s*,\s*\d{1,3})*", cand.get("content", "").strip()):
+                continue
+            cx0, cy0, cx1, cy1 = _bbox(cand)
+            if cx0 >= bx0 - 5.0:
+                continue
+            if (cx1 - cx0) <= LARGURA_ZONA_INTEIRA and bx0 < 220.0 and cx0 >= LIMITE_COLUNA_X:
+                continue
+            if (cx1 - cx0) <= LARGURA_ZONA_INTEIRA and bx0 >= 350.0 and cx1 < LIMITE_COLUNA_X:
+                continue
+
+            if not (cy0 - 4.0 <= bcy <= cy1 + 4.0):
+                continue
+
+            desvio = min(abs(cy1 - by1), abs(cy0 - by0), abs(((cy0 + cy1) / 2.0) - bcy))
+            if desvio < menor_desvio_y:
+                menor_desvio_y = desvio
+                melhor_alvo = cand
+
+        if melhor_alvo is not None and menor_desvio_y <= 5.0:
+            melhor_alvo["content"] = f"{melhor_alvo['content']} {texto}".strip()
+            melhor_alvo["inline_icons"] = _deduplicar_ids(
+                melhor_alvo["inline_icons"] + bloco.get("inline_icons", [])
+            )
+            melhor_alvo["source_element_ids"] = _deduplicar_ids(
+                melhor_alvo["source_element_ids"] + bloco.get("source_element_ids", [])
+            )
+            melhor_alvo["_bbox"] = _unir_caixas([_bbox(melhor_alvo), _bbox(bloco)])
+            consumidos.add(idx)
+
+    return [b for i, b in enumerate(blocos) if i not in consumidos]
+
+
+# ---------------------------------------------------------------------------
 # Ordem de Leitura por Zonas e Colunas (Por Página)
 # ---------------------------------------------------------------------------
 
@@ -760,9 +995,11 @@ def _ordenar_blocos_por_zonas(
     blocos: Sequence[Dict[str, Any]], largura_pagina: float
 ) -> List[Dict[str, Any]]:
     """
-    Segmenta horizontalmente a página por elementos que atravessam as duas colunas
-    (width > 215 pt e que começam na coluna esquerda e terminam na direita).
-    Nos intervalos entre eles, percorre toda a Coluna Esquerda antes da Direita.
+    Segmenta horizontalmente a página por elementos que atravessam as duas colunas.
+    Nos intervalos entre eles, percorre toda a Coluna Esquerda antes da Direita,
+    mas quando uma nova seção Nível 2 começa no fim da Coluna Esquerda e continua
+    no topo da Coluna Direita (como 'Tacômetro (conta-giros)' na pág. 21), mantém
+    os blocos da seção anterior agrupados antes do novo título.
     """
     if not blocos:
         return []
@@ -791,6 +1028,41 @@ def _ordenar_blocos_por_zonas(
         coluna_direita = [b for b in candidatos if _centro(b)[0] >= LIMITE_COLUNA_X]
         coluna_esquerda.sort(key=lambda b: (round(_bbox(b)[1], 1), _bbox(b)[0]))
         coluna_direita.sort(key=lambda b: (round(_bbox(b)[1], 1), _bbox(b)[0]))
+
+        # Se o fim da coluna esquerda inicia um novo Heading Nível 2 e termina em
+        # palavra hifenizada que continua na coluna direita (ex: pág. 21 'ver-' -> 'melha'),
+        # lê a conclusão da seção anterior na coluna direita antes de abrir o novo Heading
+        if (
+            coluna_esquerda
+            and coluna_direita
+            and coluna_esquerda[-1].get("type") == "paragraph"
+            and str(coluna_esquerda[-1].get("content") or "").rstrip().endswith("-")
+        ):
+            idx_h2_esq = next(
+                (i for i, b in enumerate(coluna_esquerda) if b.get("type") == "heading" and b.get("level") == 2),
+                None,
+            )
+            # Se o bloco imediatamente antes do Heading 2 também terminava em hífen (como 'adi-' na pág. 21),
+            # a continuação do fim da coluna esquerda ('ver-' -> 'melha') é a SEGUNDA continuação na coluna direita!
+            indices_cont_dir = [
+                i for i, b in enumerate(coluna_direita)
+                if b.get("type") == "paragraph"
+                and str(b.get("content") or "").lstrip()[:1].islower()
+            ]
+            if idx_h2_esq is not None and indices_cont_dir:
+                idx_cont_dir = indices_cont_dir[-1] if len(indices_cont_dir) > 1 else indices_cont_dir[0]
+                if idx_cont_dir > 0:
+                    sequencia = (
+                        coluna_esquerda[:idx_h2_esq]
+                        + coluna_direita[:idx_cont_dir]
+                        + coluna_esquerda[idx_h2_esq:]
+                        + coluna_direita[idx_cont_dir:]
+                    )
+                    for item in sequencia:
+                        saida.append(item)
+                        visitados.add(id(item))
+                    return
+
         for item in coluna_esquerda + coluna_direita:
             saida.append(item)
             visitados.add(id(item))
@@ -843,21 +1115,18 @@ def reconstruir_pagina(
 
     shapes = [e for e in elementos if e.get("type") == "shape"]
     textos_brutos = [e for e in elementos if e.get("type") == "text"]
-    textos = _desmembrar_textos_transversais_indice(textos_brutos)
+    textos = _normalizar_textos_pagina(textos_brutos)
     icones = [e for e in elementos if e.get("type") == "icon"]
     imagens = [e for e in elementos if e.get("type") == "image"]
 
-    # 1. Detecta Caixas de Alerta
     alertas = _detectar_alertas_pagina(pagina)
     ids_texto_em_alerta = {tid for a in alertas for tid in a["member_ids"]}
     ids_icone_em_alerta = {iid for a in alertas for iid in a["icon_element_ids"]}
     caixas_alertas = [a["_bbox"] for a in alertas]
 
-    # 2. Detecta e reconstrói Tabelas
     tabelas = _detectar_tabelas_pagina(pagina, caixas_alertas, ids_texto_em_alerta)
     ids_em_tabela = {eid for t in tabelas for eid in t["_consumed_ids"]}
 
-    # 3. Associa ícones inline aos textos remanescentes
     textos_livres = [
         t for t in textos
         if str(t["id"]) not in ids_texto_em_alerta
@@ -945,6 +1214,7 @@ def reconstruir_pagina(
             "referenced_alerts": [],
             "source_element_ids": _fontes_do_elemento(img),
             "_bbox": _bbox(img),
+            "_primary_source_ids": list(_fontes_do_elemento(img)),
         })
 
     for ic in icones:
@@ -966,48 +1236,12 @@ def reconstruir_pagina(
             "_bbox": _bbox(ic),
         })
 
+    blocos_pagina = _unificar_numeros_pagina_na_pagina(blocos_pagina)
     return _ordenar_blocos_por_zonas(blocos_pagina, largura_pagina)
 
 
-def _unificar_linhas_indice_e_legendas(blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Une pares de parágrafos na mesma linha horizontal e coluna (ex: item de índice
-    ou legenda de figura à esquerda e o número da página alinhado à direita).
-    """
-    saida: List[Dict[str, Any]] = []
-    for bloco in blocos:
-        if (
-            saida
-            and bloco["type"] == "paragraph"
-            and saida[-1]["type"] == "paragraph"
-            and bloco["page_start"] == saida[-1]["page_end"]
-        ):
-            anterior = saida[-1]
-            ax0, ay0, ax1, ay1 = _bbox(anterior)
-            bx0, by0, bx1, by1 = _bbox(bloco)
-            mesma_coluna = ((ax0 + ax1) / 2.0 < LIMITE_COLUNA_X) == (
-                (bx0 + bx1) / 2.0 < LIMITE_COLUNA_X
-            )
-            mesma_linha = abs(ay0 - by0) <= TOLERANCIA_LINHA_Y or (
-                re.fullmatch(r"[\d,\s]+", bloco["content"])
-                and ay0 - TOLERANCIA_LINHA_Y <= (by0 + by1) / 2.0 <= ay1 + TOLERANCIA_LINHA_Y
-            )
-            if mesma_coluna and mesma_linha and bx0 >= ax0:
-                anterior["content"] = f"{anterior['content']} {bloco['content']}".strip()
-                anterior["inline_icons"] = _deduplicar_ids(
-                    anterior["inline_icons"] + bloco["inline_icons"]
-                )
-                anterior["source_element_ids"] = _deduplicar_ids(
-                    anterior["source_element_ids"] + bloco["source_element_ids"]
-                )
-                anterior["_bbox"] = _unir_caixas([_bbox(anterior), _bbox(bloco)])
-                continue
-        saida.append(bloco)
-    return saida
-
-
 def _unificar_tabelas_continuadas(blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Une tabelas consecutivas (mesma página na coluna seguinte ou página seguinte) com mesmo cabeçalho."""
+    """Une tabelas consecutivas com o mesmo cabeçalho."""
     saida: List[Dict[str, Any]] = []
     for bloco in blocos:
         if (
@@ -1035,13 +1269,73 @@ def _unificar_tabelas_continuadas(blocos: List[Dict[str, Any]]) -> List[Dict[str
     return saida
 
 
+def _costurar_alertas_continuados(blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Regra 5 de Integridade: Quando uma caixa de alerta se estende para o topo da
+    coluna seguinte ou página seguinte (parágrafo truncado ou itens '•'), anexa
+    os itens continuados ao `alert_box` original.
+    """
+    saida: List[Dict[str, Any]] = []
+    for bloco in blocos:
+        if (
+            saida
+            and saida[-1]["type"] == "alert_box"
+            and bloco["type"] == "paragraph"
+            and bloco["page_start"] in (saida[-1]["page_end"], saida[-1]["page_end"] + 1)
+        ):
+            alerta = saida[-1]
+            texto_b = bloco["content"].strip()
+            m_bullet = REGEX_ITEM_BULLET_ALERTA.match(texto_b)
+
+            ultimo_texto_alerta = (
+                alerta["items"][-1] if alerta["items"] else alerta.get("lead_text", "")
+            ).rstrip()
+            alerta_truncado = bool(ultimo_texto_alerta) and not ultimo_texto_alerta.endswith(
+                (".", "!", "?", ":")
+            )
+
+            if m_bullet:
+                alerta["items"].append(m_bullet.group(1).strip())
+                alerta["page_end"] = max(int(alerta["page_end"]), int(bloco["page_end"]))
+                alerta["inline_icons"] = _deduplicar_ids(
+                    alerta["inline_icons"] + bloco.get("inline_icons", [])
+                )
+                alerta["source_element_ids"] = _deduplicar_ids(
+                    alerta["source_element_ids"] + bloco.get("source_element_ids", [])
+                )
+                continue
+
+            if alerta_truncado and not REGEX_ITEM_LISTA.match(texto_b):
+                if alerta["items"]:
+                    if alerta["items"][-1].endswith("-"):
+                        alerta["items"][-1] = alerta["items"][-1][:-1] + texto_b
+                    else:
+                        alerta["items"][-1] = f"{alerta['items'][-1]} {texto_b}"
+                else:
+                    if alerta["lead_text"].endswith("-"):
+                        alerta["lead_text"] = alerta["lead_text"][:-1] + texto_b
+                    else:
+                        alerta["lead_text"] = f"{alerta['lead_text']} {texto_b}".strip()
+                alerta["page_end"] = max(int(alerta["page_end"]), int(bloco["page_end"]))
+                alerta["inline_icons"] = _deduplicar_ids(
+                    alerta["inline_icons"] + bloco.get("inline_icons", [])
+                )
+                alerta["source_element_ids"] = _deduplicar_ids(
+                    alerta["source_element_ids"] + bloco.get("source_element_ids", [])
+                )
+                continue
+
+        saida.append(bloco)
+    return saida
+
+
 def _costurar_paragrafos_continuados(
     blocos: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
     Costura blocos de texto consecutivos quando o primeiro termina com palavra
-    hifenizada ou sem pontuação final (., !, ?, :) e o seguinte é a continuação
-    da mesma sentença (inclusive dentro da mesma coluna após linhas com ícones).
+    hifenizada ou sem pontuação final (., !, ?, :) e o seguinte começa com
+    letra minúscula ou continuação de item de lista.
     """
     saida: List[Dict[str, Any]] = []
     for bloco in blocos:
@@ -1054,23 +1348,28 @@ def _costurar_paragrafos_continuados(
             anterior = saida[-1]
             texto_a = anterior["content"].rstrip()
             texto_b = bloco["content"].lstrip()
-            texto_a_sem_icone = re.sub(r"<icon:icon_\d+>\s*$", "", texto_a).rstrip()
+            texto_a_sem_icone = re.sub(r"(?:<icon:icon_\d+>\s*)+$", "", texto_a).rstrip()
+            texto_b_sem_icone = re.sub(r"^(?:<icon:icon_\d+>\s*)+", "", texto_b).lstrip()
 
             nao_eh_novo_item = not REGEX_ITEM_LISTA.match(texto_b)
             termina_hifen = texto_a_sem_icone.endswith("-")
             sem_pontuacao_final = bool(texto_a_sem_icone) and not texto_a_sem_icone.endswith(
                 (".", "!", "?", ":", ";")
             )
-            comeca_continuidade = bool(texto_b) and (
-                texto_b[0].islower()
-                or texto_b.startswith(("→", "/", "(", "<icon:"))
+            comeca_minuscula = bool(texto_b_sem_icone) and (
+                texto_b_sem_icone[0].islower()
+                or texto_b_sem_icone.startswith(("→", "/", "("))
             )
 
-            # Evita fundir linhas independentes do Índice
-            eh_linha_indice = bool(re.search(r"\s\d{1,3}$", texto_a_sem_icone))
+            eh_linha_indice = int(anterior["page_start"]) in (6, 7)
+            eh_chamada_isolada = texto_a_sem_icone.startswith("⚠️")
 
-            if nao_eh_novo_item and not eh_linha_indice and (
-                termina_hifen or (sem_pontuacao_final and comeca_continuidade)
+            if (
+                nao_eh_novo_item
+                and not eh_linha_indice
+                and not eh_chamada_isolada
+                and comeca_minuscula
+                and (termina_hifen or sem_pontuacao_final)
             ):
                 if termina_hifen and texto_a.endswith("-"):
                     anterior["content"] = texto_a[:-1] + texto_b
@@ -1124,7 +1423,7 @@ def _agrupar_listas(blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             saida
             and saida[-1]["type"] == "paragraph"
             and saida[-1]["page_end"] == bloco["page_start"]
-            and saida[-1]["content"].endswith(":")
+            and re.sub(r"(?:<icon:icon_\d+>\s*)+$", "", saida[-1]["content"]).rstrip().endswith(":")
             and not REGEX_LEGENDA_FIGURA.match(saida[-1]["content"])
         ):
             lead_bloco = saida.pop()
@@ -1176,7 +1475,7 @@ def _vincular_legendas_imagens(blocos: List[Dict[str, Any]]) -> List[Dict[str, A
     for idx, bloco in enumerate(blocos):
         if bloco["type"] != "image":
             continue
-        for offset in (1, -1, 2, -2, 3):
+        for offset in (1, -1, 2, -2, 3, -3, 4):
             viz_idx = idx + offset
             if not (0 <= viz_idx < len(blocos)) or viz_idx in consumidos:
                 continue
@@ -1194,6 +1493,9 @@ def _vincular_legendas_imagens(blocos: List[Dict[str, Any]]) -> List[Dict[str, A
                     )
                     bloco["source_element_ids"] = _deduplicar_ids(
                         bloco["source_element_ids"] + viz.get("source_element_ids", [])
+                    )
+                    bloco["_primary_source_ids"] = _deduplicar_ids(
+                        bloco.get("_primary_source_ids", []) + viz.get("source_element_ids", [])
                     )
                     imagens_por_fig[num_fig] = bloco
                     consumidos.add(viz_idx)
@@ -1215,9 +1517,28 @@ def _vincular_legendas_imagens(blocos: List[Dict[str, Any]]) -> List[Dict[str, A
                     img_alvo["source_element_ids"] = _deduplicar_ids(
                         img_alvo["source_element_ids"] + bloco["source_element_ids"]
                     )
+                    eh_explicacao_instrumentos = "explicaç" in bloco.get("content", "").lower()
                     idx += 1
                     while idx < len(blocos):
+                        if idx in consumidos:
+                            idx += 1
+                            continue
                         item_leg = blocos[idx]
+                        # Se houver um bloco `image` intercalado na mesma página (ex: Fig. 8 entre
+                        # "Legenda para Fig. 7" e seus itens), pula o bloco `image` sem encerrar a legenda!
+                        if item_leg["type"] == "image" and item_leg["page_start"] == img_alvo["page_start"]:
+                            idx += 1
+                            continue
+                        if item_leg["type"] == "icon" and item_leg["page_start"] <= img_alvo["page_end"] + 1:
+                            img_alvo["inline_icons"] = _deduplicar_ids(
+                                img_alvo["inline_icons"] + ([item_leg["icon_id"]] if item_leg.get("icon_id") else [])
+                            )
+                            img_alvo["source_element_ids"] = _deduplicar_ids(
+                                img_alvo["source_element_ids"] + item_leg.get("source_element_ids", [])
+                            )
+                            consumidos.add(idx)
+                            idx += 1
+                            continue
                         if item_leg["type"] not in {"paragraph", "list"}:
                             break
                         if item_leg["page_start"] > img_alvo["page_end"] + 1:
@@ -1227,6 +1548,12 @@ def _vincular_legendas_imagens(blocos: List[Dict[str, Any]]) -> List[Dict[str, A
                             REGEX_LEGENDA_FIGURA.match(texto_item)
                             or re.match(r"^\s*Fig\.?\s*\d+", texto_item, re.I)
                             or REGEX_CHAMADA_ALERTA.match(texto_item)
+                            or (
+                                eh_explicacao_instrumentos
+                                and re.sub(r"^(?:<icon:icon_\d+>\s*)+", "", texto_item).startswith(
+                                    "Dependendo da versão"
+                                )
+                            )
                         ):
                             break
                         if item_leg["type"] == "paragraph":
@@ -1436,8 +1763,8 @@ def executar_fase3_reconstrucao(
             blocos_brutos.extend(blocos_pagina)
             estatisticas["paginas"] += 1
 
-    blocos = _unificar_linhas_indice_e_legendas(blocos_brutos)
-    blocos = _unificar_tabelas_continuadas(blocos)
+    blocos = _unificar_tabelas_continuadas(blocos_brutos)
+    blocos = _costurar_alertas_continuados(blocos)
     blocos = _costurar_paragrafos_continuados(blocos)
     blocos = _agrupar_listas(blocos)
     blocos = _vincular_legendas_imagens(blocos)
@@ -1497,45 +1824,83 @@ def gerar_debug_fase3_pdf(
 ) -> Path:
     """
     Gera `debug_fase3_ordem_leitura.pdf` demarcando as caixas semânticas coloridas
-    por tipo, o identificador `#reading_order` e o grafo direcionado de leitura.
+    por tipo, as caixas de `legend_items` absorvidas pelas figuras e o grafo de leitura.
     """
     pdf_saida.parent.mkdir(parents=True, exist_ok=True)
 
-    origem_por_id: Dict[str, Tuple[int, Tuple[float, float, float, float]]] = {}
+    origem_por_id: Dict[str, Tuple[int, Tuple[float, float, float, float], str]] = {}
     for pagina in paginas_fase2:
         num_pag = int(pagina["page"])
         for elemento in pagina.get("elements", []):
             caixa = _bbox(elemento)
+            tipo_el = str(elemento.get("type") or "")
             if elemento.get("id"):
-                origem_por_id[str(elemento["id"])] = (num_pag, caixa)
+                origem_por_id[str(elemento["id"])] = (num_pag, caixa, tipo_el)
             for sid in elemento.get("source_element_ids") or []:
-                origem_por_id[str(sid)] = (num_pag, caixa)
+                origem_por_id[str(sid)] = (num_pag, caixa, tipo_el)
 
     blocos_por_pagina: Dict[int, List[Tuple[int, int, str, Tuple[float, float, float, float]]]] = (
         defaultdict(list)
     )
-    for reg in registros:
-        caixas_por_pag: Dict[int, List[Tuple[float, float, float, float]]] = defaultdict(list)
-        for sid in reg.get("source_element_ids", []):
-            info = origem_por_id.get(str(sid))
-            if info is not None:
-                caixas_por_pag[info[0]].append(info[1])
+    legendas_por_pagina: Dict[int, List[Tuple[int, str, Tuple[float, float, float, float]]]] = (
+        defaultdict(list)
+    )
 
-        for num_pag, lista_caixas in caixas_por_pag.items():
+    for reg in registros:
+        tipo_reg = str(reg["type"])
+        pag_inicio_reg = int(reg["page_start"])
+        caixas_principais_por_pag: Dict[int, List[Tuple[float, float, float, float]]] = defaultdict(list)
+        caixas_legenda_por_pag: Dict[int, List[Tuple[float, float, float, float]]] = defaultdict(list)
+
+        for idx_sid, sid in enumerate(reg.get("source_element_ids", [])):
+            info = origem_por_id.get(str(sid))
+            if info is None:
+                continue
+            num_pag, caixa, tipo_el = info
+            if tipo_reg == "image" and idx_sid >= 2 and tipo_el != "image":
+                caixas_legenda_por_pag[num_pag].append(caixa)
+            else:
+                caixas_principais_por_pag[num_pag].append(caixa)
+
+        for num_pag, lista_caixas in caixas_principais_por_pag.items():
+            if tipo_reg == "image" and num_pag != pag_inicio_reg:
+                continue
             envolvente = _unir_caixas(lista_caixas)
             blocos_por_pagina[num_pag].append(
-                (int(reg["reading_order"]), int(reg["read_order"]), str(reg["type"]), envolvente)
+                (int(reg["reading_order"]), int(reg["read_order"]), tipo_reg, envolvente)
+            )
+
+        rotulo_fig = str(reg.get("figure_label") or "image")
+        for num_pag, lista_leg in caixas_legenda_por_pag.items():
+            envolvente_leg = _unir_caixas(lista_leg)
+            legendas_por_pagina[num_pag].append(
+                (int(reg["reading_order"]), rotulo_fig, envolvente_leg)
             )
 
     documento = fitz.open(str(pdf_original))
     total_demarcados = 0
 
-    for num_pag, itens_pagina in blocos_por_pagina.items():
-        if not (1 <= num_pag <= len(documento)):
+    for num_pag in range(1, len(documento) + 1):
+        itens_pagina = blocos_por_pagina.get(num_pag, [])
+        legs_pagina = legendas_por_pagina.get(num_pag, [])
+        if not itens_pagina and not legs_pagina:
             continue
+
         itens_pagina.sort(key=lambda item: item[0])
         canvas = documento[num_pag - 1].new_shape()
         centros: List[fitz.Point] = []
+
+        cor_legenda = (0.00, 0.55, 0.70)
+        for reading_order, rotulo_fig, (lx0, ly0, lx1, ly1) in legs_pagina:
+            ret_leg = fitz.Rect(lx0, ly0, lx1, ly1)
+            canvas.draw_rect(ret_leg)
+            canvas.finish(color=cor_legenda, width=0.6, dashes="[2 2] 0", fill_opacity=0)
+            canvas.insert_text(
+                fitz.Point(ret_leg.x0, max(6.0, ret_leg.y0 - 1.5)),
+                f"#{reading_order} (legend_items -> {rotulo_fig})",
+                fontsize=4.3,
+                color=cor_legenda,
+            )
 
         for reading_order, read_order, tipo, (x0, y0, x1, y1) in itens_pagina:
             cor = CORES_DEBUG_FASE3.get(tipo, (0.2, 0.2, 0.2))
@@ -1554,8 +1919,7 @@ def gerar_debug_fase3_pdf(
         for p_atual, p_prox in zip(centros, centros[1:]):
             _desenhar_seta_fluxo(canvas, p_atual, p_prox)
 
-        if centros:
-            canvas.commit()
+        canvas.commit()
 
     documento.save(str(pdf_saida), garbage=3, deflate=True)
     documento.close()
