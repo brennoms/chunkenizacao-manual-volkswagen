@@ -10,3 +10,5 @@ dados_preparados/document*
 dados_preparados/icons_catalog.json
 
 chunks/
+
+test/
