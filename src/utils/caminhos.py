@@ -64,6 +64,8 @@ raiz = {
         "03_chunks": {
             "path": _raiz / "OUTPUT" / "03_resultado" / "03_chunks",
             "chunks": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "chunks.jsonl",
+            "chunks_tecnicos": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "chunks_tecnicos.jsonl",
+            "chunks_indices": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "chunks_indices.jsonl",
             "manifest": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "manifest.json"
         }
     }
@@ -85,7 +87,7 @@ def garantir_diretorios(diretorio: dict):
             garantir_diretorios(c)
         elif isinstance(c, Path) and c.suffix == "" and not c.exists():
             c.mkdir(parents=True, exist_ok=True)
-            if '__name__' == '__main__':
+            if __name__ == "__main__":
                 print(f"Diretório {c} criado com sucesso.")
 
 garantir_diretorios(raiz)
