@@ -142,6 +142,7 @@ dados_preparados/
 ├── document_preparado.jsonl
 ├── icons_catalog.json
 ├── descricao_images.json
+├── descricao_icons.json
 ├── assets/
 │   ├── all_icons/
 │   │   ├── icon_0001.png
@@ -180,7 +181,7 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
 | `id` | `string` | Identificador único do elemento preparado (`blk_000001`). |
 | `reading_order` | `int` | Ordem sequencial global de leitura no documento ($1 \dots N$). |
 | `read_order` | `int` | Ordem de leitura do elemento, definida pela posição de cima para baixo e da esquerda para a direita, levando em conta colunas.|
-| `type` | `string` | Tipo semântico: `heading`, `paragraph`, `list`, `alert_box`, `table` ou `image`. |
+| `type` | `string` | Tipo semântico: `heading`, `paragraph`, `list`, `alert_box`, `table`, `image` ou `icon`. |
 | `page_start` | `int` | Página onde o elemento se inicia. |
 | `page_end` | `int` | Página onde o elemento termina. |
 | `section_path` | `list[str]` | Caminho hierárquico completo de títulos até este elemento. |
@@ -191,7 +192,7 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
 
 ---
 
-### 4.2. Elemento Ícone — `type: "icon"` (`document_fase2.jsonl`)
+### 4.2. Elemento Ícone — `type: "icon"` (`document_fase2.jsonl` e `document_preparado.jsonl`)
 
 Os ícones consolidados na Fase 2 possuem os dois identificadores abaixo:
 
@@ -199,6 +200,7 @@ Os ícones consolidados na Fase 2 possuem os dois identificadores abaixo:
 | --- | --- | --- |
 | `icon_id` | `string` | Identificador global do modelo visual. Ocorrências equivalentes compartilham o mesmo valor. |
 | `icon_order_id` | `int` | Identificador da instância no PDF. É único por ocorrência e começa em `1` no primeiro ícone do PDF, sem reiniciar por página e sem deduplicar ícones iguais. |
+| `description` | `string` | Descrição textual do ícone, obtida do arquivo `descricao_icons.json` pela chave `icon_id`. |
 
 ```json
 {
@@ -208,6 +210,27 @@ Os ícones consolidados na Fase 2 possuem os dois identificadores abaixo:
   "icon_order_id": 1,
   "classification": "standalone",
   "source_element_ids": ["el_000213"]
+}
+```
+
+Na Fase 3, cada ícone também é emitido como um elemento com `type: "icon"` e
+recebe sua descrição a partir do arquivo `descricao_icons.json`:
+
+```json
+{
+  "icon_id": "icon_0001",
+  "icon_order_id": 1,
+  "type": "icon",
+  "image_path": "assets/icons/icon_0001.png",
+  "description": "Descrição do ícone."
+}
+```
+
+O arquivo `descricao_icons.json` deve seguir o formato:
+
+```json
+{
+  "icon_0001": "Descrição do ícone."
 }
 ```
 
