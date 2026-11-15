@@ -804,38 +804,59 @@ def gerar_debug_fase2_pdf(
     return pdf_saida
 
 
-if __name__ == "__main__":
-    from utils.caminhos import raiz
+def executar_fase2(
+    jsonl_entrada: Path,
+    jsonl_saida: Path,
+    pdf_original: Optional[Path],
+    diretorio_asssets: Optional[Path],
+    diretorio_icons: Optional[Path],
+    arquivo_catalogo: Optional[Path],
+    pdf_saida_debug: Optional[Path],
+) -> Tuple[List[Dict[str, Any]], Counter]:
+    """Executa a Fase 2 e gera PDF de debug."""
 
     #limpa o diretório de saída da Fase 2 antes de executar novamente
     if BUSCAR_ICONES:
-        if raiz["dados_preparados"]["document_fase2"].exists():
-            raiz["dados_preparados"]["document_fase2"].unlink()
-        if raiz["dados_preparados"]["icons_catalog"].exists():
-            raiz["dados_preparados"]["icons_catalog"].unlink()
-        if raiz["dados_preparados"]["debug_visual"]["fase2_icones"].exists():
-            raiz["dados_preparados"]["debug_visual"]["fase2_icones"].unlink()
-        if raiz["dados_preparados"]["assets"]["paridade"].exists():
-            for file in raiz["dados_preparados"]["assets"]["paridade"].glob("*"):
-                file.unlink()
-        if raiz["dados_preparados"]["assets"]["icons"].exists():
-            for file in raiz["dados_preparados"]["assets"]["icons"].glob("*"):
-                file.unlink()
-        diretorio_all_icones = raiz["dados_preparados"]["path"] / "assets" / "all_icons"
-        if diretorio_all_icones.exists():
-            for file in diretorio_all_icones.glob("*"):
-                file.unlink()
-            
+        if jsonl_saida.exists():
+            jsonl_saida.unlink()
+        if arquivo_catalogo and arquivo_catalogo.exists():
+            arquivo_catalogo.unlink()
+        if pdf_saida_debug and pdf_saida_debug.exists():
+            pdf_saida_debug.unlink()
+        if diretorio_asssets and diretorio_asssets.exists():
+            for item in diretorio_asssets.glob("*"):
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    for subitem in item.glob("**/*"):
+                        if subitem.is_file():
+                            subitem.unlink()
+                    item.rmdir()
+        
 
-    paginas_fase2, _estatisticas = executar_fase2_consolidacao(
+    paginas, estatisticas = executar_fase2_consolidacao(
+        jsonl_entrada=jsonl_entrada,
+        jsonl_saida=jsonl_saida,
+        pdf_original=pdf_original,
+        diretorio_icons=diretorio_icons,
+        arquivo_catalogo=arquivo_catalogo,
+    )
+
+    gerar_debug_fase2_pdf(
+        pdf_original=pdf_original or Path(),
+        paginas=paginas,
+        pdf_saida=pdf_saida_debug,
+    )
+
+if __name__ == "__main__":
+    from utils.caminhos import raiz
+
+    executar_fase2(
         jsonl_entrada=raiz["dados_preparados"]["document_fase1"],
         jsonl_saida=raiz["dados_preparados"]["document_fase2"],
         pdf_original=raiz["dados_extraidos"]["pdf_original"],
+        diretorio_asssets = raiz["dados_preparados"]["assets"]["path"],
         diretorio_icons=raiz["dados_preparados"]["assets"]["icons"],
         arquivo_catalogo=raiz["dados_preparados"]["icons_catalog"],
-    )
-    gerar_debug_fase2_pdf(
-        pdf_original=raiz["dados_extraidos"]["pdf_original"],
-        paginas=paginas_fase2,
-        pdf_saida=raiz["dados_preparados"]["debug_visual"]["fase2_icones"],
+        pdf_saida_debug=raiz["dados_preparados"]["debug_visual"]["fase2_icones"]
     )

@@ -347,24 +347,32 @@ def gerar_debug_fase1_pdf(
     return pdf_saida
 
 
+def executar_fase1_completo(
+    jsonl_entrada: Path,
+    jsonl_saida: Path,
+    pdf_original: Path,
+    pdf_debug_saida: Path,
+) -> Tuple[List[Dict[str, Any]], Counter]:
+    """
+    Executa a Fase 1 completa: saneamento espacial, filtragem de ruído e geração de PDF de debug.
+    """
+    removidos, estatisticas = executar_fase1_saneamento(
+        jsonl_entrada=jsonl_entrada,
+        jsonl_saida=jsonl_saida,
+    )
+    gerar_debug_fase1_pdf(
+        pdf_original=pdf_original,
+        removidos_por_pagina=removidos,
+        pdf_saida=pdf_debug_saida,
+    )
+
+
 if __name__ == "__main__":
     from utils.caminhos import raiz
 
-    pdf_original_path = raiz["dados_extraidos"]["pdf_original"]
-
-    # Entrada: document.jsonl da extração bruta
-    jsonl_bruto = raiz["dados_extraidos"]["conteudo_extraido"]["document"]
-
-    # Saídas da Fase 1 direcionadas para a estrutura de 'dados_preparados'
-    jsonl_fase1 = raiz["dados_preparados"]["document_fase1"]
-    pdf_debug_fase1 = raiz["dados_preparados"]["debug_visual"]["fase1_removidos"]
-
-    removidos, _stats = executar_fase1_saneamento(
-        jsonl_entrada=jsonl_bruto,
-        jsonl_saida=jsonl_fase1,
-    )
-    gerar_debug_fase1_pdf(
-        pdf_original=pdf_original_path,
-        removidos_por_pagina=removidos,
-        pdf_saida=pdf_debug_fase1,
+    executar_fase1_completo(
+        jsonl_entrada = raiz["dados_extraidos"]["conteudo_extraido"]["document"],
+        jsonl_saida = raiz["dados_preparados"]["document_fase1"],
+        pdf_original = raiz["dados_extraidos"]["pdf_original"],
+        pdf_debug_saida = raiz["dados_preparados"]["debug_visual"]["fase1_removidos"],
     )

@@ -1927,32 +1927,41 @@ def gerar_debug_fase3_pdf(
     return pdf_saida
 
 
-if __name__ == "__main__":
-    from utils.caminhos import raiz
-
-    dados_prep = raiz["dados_preparados"]
-    caminho_saida = dados_prep.get(
-        "document_preparado",
-        dados_prep["path"] / "document_preparado.jsonl",
-    )
-    caminho_debug_pdf = dados_prep["debug_visual"].get(
-        "fase3_ordem_leitura",
-        dados_prep["path"] / "debug_visual" / "debug_fase3_ordem_leitura.pdf",
-    )
-
-    if caminho_saida.exists():
-        caminho_saida.unlink()
-    if caminho_debug_pdf.exists():
-        caminho_debug_pdf.unlink()
-
+def executar_fase3(
+    jsonl_entrada: Path,
+    jsonl_saida: Path,
+    arquivo_descr_images: Optional[Path] = None,
+    arquivo_descr_icons: Optional[Path] = None,
+    arquivo_catalogo_icons: Optional[Path] = None,
+    caminho_debug_pdf: Optional[Path] = None,
+    pdf_original: Optional[Path] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Counter]:
+    """
+    Executa a Fase 3 completa e grava `document_preparado.jsonl`.
+    Retorna as páginas da Fase 2, os registros finais e as estatísticas.
+    """
     paginas_f2, registros_f3, _estatisticas = executar_fase3_reconstrucao(
-        jsonl_entrada=dados_prep["document_fase2"],
-        jsonl_saida=caminho_saida,
-        arquivo_catalogo_icons=dados_prep["icons_catalog"],
+        jsonl_entrada=jsonl_entrada,
+        jsonl_saida=jsonl_saida,
+        arquivo_descr_images=arquivo_descr_images,
+        arquivo_descr_icons=arquivo_descr_icons,
+        arquivo_catalogo_icons=arquivo_catalogo_icons,
     )
     gerar_debug_fase3_pdf(
-        pdf_original=raiz["dados_extraidos"]["pdf_original"],
+        pdf_original=pdf_original,
         paginas_fase2=paginas_f2,
         registros=registros_f3,
         pdf_saida=caminho_debug_pdf,
+    )
+
+
+if __name__ == "__main__":
+    from utils.caminhos import raiz
+
+    executar_fase3(
+        jsonl_entrada = raiz["dados_preparados"]["document_fase2"],
+        jsonl_saida = raiz["dados_preparados"]["document_preparado"],
+        arquivo_catalogo_icons = raiz["dados_preparados"]["icons_catalog"],
+        caminho_debug_pdf = raiz["dados_preparados"]["debug_visual"]["fase3_ordem_leitura"],
+        pdf_original = raiz["dados_extraidos"]["pdf_original"],
     )
