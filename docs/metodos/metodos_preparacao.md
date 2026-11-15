@@ -106,7 +106,7 @@ Gradeamento formado pela interseção de fios horizontais e verticais (`shape`).
 #### 6. Estruturação de Imagens e Legendas (`image`)
 Cada elemento de imagem recebe:
 - `id_image`: número identificador da imagem, utilizado como chave no documento JSON de descrições.
-- `image_path`: caminho relativo do arquivo principal em `assets/`.
+- `image_path`: caminho relativo do arquivo principal na pasta de extração, em `assets/`.
 - `caption`: texto da legenda associada (ex.: `"Fig. 20 ..."`).
 - `legend_items`: lista ordenada dos itens explicativos numerados associados à figura (`"Legenda para → Fig. X"`), com os números de chamada já concatenados ao texto.
 - `description`: descrição da imagem obtida a partir do arquivo `descricao_images.json`, no qual a chave é o número da imagem (`id_image`) e o valor é a descrição correspondente.
@@ -130,6 +130,10 @@ Antes do descarte final das coordenadas geométricas, é gerado o arquivo `debug
 
 ## 3. Estrutura de Armazenamento
 
+Os assets das imagens extraídas permanecem na pasta de extração
+(`conteudo_extraido/assets/`). O caminho registrado em `image_path` é relativo
+ao diretório da extração, normalmente no formato `assets/asset_000010.png`.
+
 ```text
 dados_preparados/
 ├── document_fase1.jsonl
@@ -138,9 +142,6 @@ dados_preparados/
 ├── icons_catalog.json
 ├── descricao_images.json
 ├── assets/
-│   ├── asset_000001.png
-│   ├── asset_000002.jpeg
-│   ├── ...
 │   ├── all_icons/
 │   │   ├── icon_0001.png
 │   │   ├── icon_0002.png
