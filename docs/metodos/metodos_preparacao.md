@@ -80,6 +80,7 @@ Converte os elementos limpos e consolidados na sequência lógica de leitura e e
 - A página é segmentada horizontalmente por elementos de largura total ($\text{width} > 210\text{ pt}$, como títulos de capítulo ou ilustrações largas).
 - Nos intervalos entre elementos de largura total, o fluxo percorre integralmente a **Coluna Esquerda** ($\text{centro\_x} < 210\text{ pt}$) de cima para baixo antes de iniciar a **Coluna Direita** ($\text{centro\_x} \ge 210\text{ pt}$).
 - O atributo `reading_order` é um inteiro sequencial global ($1 \dots N$) ao longo de todo o documento.
+- O atributo `read_order` registra a ordem de leitura de cada elemento, percorrendo os elementos de cima para baixo e, em seguida, da esquerda para a direita.
 
 #### 2. Hierarquia de Títulos (`heading` e `section_path`)
 Os estilos tipográficos brutos são convertidos em níveis hierárquicos (`level` de 1 a 4) e descartados após a classificação:
@@ -178,6 +179,7 @@ Cada linha do arquivo representa uma unidade semântica ordenada globalmente. N�
 | --- | --- | --- |
 | `id` | `string` | Identificador único do elemento preparado (`blk_000001`). |
 | `reading_order` | `int` | Ordem sequencial global de leitura no documento ($1 \dots N$). |
+| `read_order` | `int` | Ordem de leitura do elemento, definida pela posição de cima para baixo e da esquerda para a direita, levando em conta colunas.|
 | `type` | `string` | Tipo semântico: `heading`, `paragraph`, `list`, `alert_box`, `table` ou `image`. |
 | `page_start` | `int` | Página onde o elemento se inicia. |
 | `page_end` | `int` | Página onde o elemento termina. |
