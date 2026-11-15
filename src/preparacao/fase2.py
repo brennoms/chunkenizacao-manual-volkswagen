@@ -16,10 +16,10 @@ from PIL import Image, ImageDraw, ImageFont
 TOLERANCIA_BBOX = 1.5
 LIMITE_TEXTO_ICONE = 5
 LIMITE_SHAPE_ICONE = 40.0
-LIMITE_HAMMING_PHASH = 7
+LIMITE_HAMMING_PHASH = 5
 LIMITE_COR_ICONE = 15
-LIMITE_VARIACAO_ASPECTO = 0.1
-ESCALA_RENDERIZACAO_ICONE = 30.0
+LIMITE_VARIACAO_ASPECTO = 0.03
+ESCALA_RENDERIZACAO_ICONE = 60.0
 BUSCAR_ICONES = False  # Defina como True para salvar as capturas dos ícones
 
 COLUNAS_PARIDADE = 8
@@ -32,6 +32,35 @@ COLUNAS_MATRIZES_PARIDADE = 4
 
 # Informe aqui as ocorrências que devem compartilhar o mesmo `icon_id`.
 ICONES_SEMELHANTES_MANUAIS: Dict[int, List[int]] = {
+    3: [366], #alerta laranja com setinha
+    6: [314], # alerta vermelho com fundo
+    7: [237], # alerta laranja com fundo
+    8: [678], # alerta amarelo com fundo
+    12: [407, 508], 
+    13: [409, 528], 
+    14: [131], 
+    15: [516], 
+    16: [634], 
+    17: [637], 
+    18: [635], 
+    26: [137, 650], 
+    27: [641, 1046],
+    66: [68, 76, 103, 688, 1677], # alerta laranja sem fundo
+    158: [161, 274, 346, 1160, 930],
+    159: [1159],
+    313: [356],
+    342: [350],
+    398: [419],
+    704: [724],
+    763: [778],
+    781: [762],
+}
+
+# Informe aqui grupos que só podem ser comparados entre os próprios itens.
+# Diferentemente de `ICONES_SEMELHANTES_MANUAIS`, eles não recebem equivalências
+# automáticas com ocorrências fora do grupo.
+ICONES_SEMELHANTES_MANUAIS_RESTRITOS: Dict[int, List[int]] = {
+    762: [768, 812, 777]
 }
 
 
@@ -283,9 +312,9 @@ def _carregar_icones_existentes(
             ocorrencia["signature"] = _assinatura_da_imagem(imagem.copy())
 
 
-def _grupos_manuais_por_ordem() -> Dict[int, int]:
+def _grupos_por_ordem(configuracao: Dict[int, List[int]]) -> Dict[int, int]:
     grupos: List[set[int]] = []
-    for icon_order_id, semelhantes in ICONES_SEMELHANTES_MANUAIS.items():
+    for icon_order_id, semelhantes in configuracao.items():
         grupo = {int(icon_order_id), *(int(item) for item in semelhantes)}
         grupos_com_intersecao = [existente for existente in grupos if grupo & existente]
         if grupos_com_intersecao:
@@ -301,6 +330,14 @@ def _grupos_manuais_por_ordem() -> Dict[int, int]:
         for grupo in grupos
         for icon_order_id in grupo
     }
+
+
+def _grupos_manuais_por_ordem() -> Dict[int, int]:
+    return _grupos_por_ordem(ICONES_SEMELHANTES_MANUAIS)
+
+
+def _grupos_restritos_por_ordem() -> Dict[int, int]:
+    return _grupos_por_ordem(ICONES_SEMELHANTES_MANUAIS_RESTRITOS)
 
 
 def _grupos_manuais_por_ocorrencia(
@@ -493,68 +530,91 @@ def _preparar_imagens_das_ocorrencias(
 def _catalogar_ocorrencias(
     ocorrencias: Sequence[Dict[str, Any]], diretorio_icons: Path
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Tuple[int, fitz.Pixmap]]]]:
-    catalogo: Dict[str, Dict[str, Any]] = {}
-    representantes: List[
-        Tuple[Tuple[str, List[int]], Dict[str, float], Dict[str, Any]]
-    ] = []
-    pixmaps_por_icon: Dict[str, List[Tuple[int, fitz.Pixmap]]] = defaultdict(list)
+    uf = _UnionFind(len(ocorrencias))
     grupos_manuais = _grupos_manuais_por_ocorrencia(ocorrencias)
-    registros_por_grupo_manual: Dict[int, Dict[str, Any]] = {}
-
-    for ocorrencia in ocorrencias:
-        icon_order_id = ocorrencia["element"]["icon_order_id"]
-        assinatura, cor = ocorrencia["signature"]
-        grupo_manual = grupos_manuais.get(icon_order_id)
-        registro = (
-            registros_por_grupo_manual.get(grupo_manual)
-            if grupo_manual is not None
-            else catalogo.get(f"{assinatura}:{','.join(map(str, cor))}")
-        )
-        if registro is None:
-            assinatura_atual = (assinatura, cor)
-            registro = next(
-                (
-                    candidato
-                    for assinatura_representante, bbox_representante, candidato
-                    in representantes
-                    if _assinaturas_equivalentes(
-                        assinatura_atual,
-                        assinatura_representante,
-                        ocorrencia["bbox"],
-                        bbox_representante,
-                    )
-                ),
-                None,
-            )
-        if registro is None:
-            icon_id = f"icon_{len(catalogo) + 1:04d}"
-            registro = {
-                "icon_id": icon_id,
-                "image_path": f"assets/icons/{icon_id}.png",
-                "phash": assinatura,
-                "dominant_color": cor,
-                "occurrences": [],
-            }
-            catalogo[f"{assinatura}:{','.join(map(str, cor))}"] = registro
-            representantes.append(((assinatura, cor), ocorrencia["bbox"], registro))
-            if BUSCAR_ICONES:
-                _adicionar_asset(
-                    ocorrencia["pixmap"], diretorio_icons / f"{icon_id}.png"
-                )
-
+    grupos_restritos = _grupos_restritos_por_ordem()
+    indices_por_grupo_manual: Dict[int, List[int]] = defaultdict(list)
+    indices_por_grupo_restrito: Dict[int, List[int]] = defaultdict(list)
+    for indice, ocorrencia in enumerate(ocorrencias):
+        ordem = ocorrencia["element"]["icon_order_id"]
+        grupo_manual = grupos_manuais.get(ordem)
         if grupo_manual is not None:
-            registros_por_grupo_manual[grupo_manual] = registro
-        ocorrencia["element"]["icon_id"] = registro["icon_id"]
-        pixmaps_por_icon[registro["icon_id"]].append(
-            (icon_order_id, ocorrencia["pixmap"])
-        )
-        registro["occurrences"].append(
-            {
-                "page": ocorrencia["page"],
-                "icon_order_id": icon_order_id,
-                "source_element_ids": ocorrencia["source_element_ids"],
-            }
-        )
+            indices_por_grupo_manual[grupo_manual].append(indice)
+        grupo_restrito = grupos_restritos.get(ordem)
+        if grupo_restrito is not None:
+            indices_por_grupo_restrito[grupo_restrito].append(indice)
+
+    for indices in indices_por_grupo_manual.values():
+        primeiro = indices[0]
+        for indice in indices[1:]:
+            uf.union(primeiro, indice)
+    for indices in indices_por_grupo_restrito.values():
+        primeiro = indices[0]
+        for indice in indices[1:]:
+            uf.union(primeiro, indice)
+
+    assinaturas = [ocorrencia["signature"] for ocorrencia in ocorrencias]
+    bboxes = [ocorrencia["bbox"] for ocorrencia in ocorrencias]
+    for primeiro in range(len(ocorrencias)):
+        for segundo in range(primeiro + 1, len(ocorrencias)):
+            grupo_restrito_primeiro = grupos_restritos.get(
+                ocorrencias[primeiro]["element"]["icon_order_id"]
+            )
+            grupo_restrito_segundo = grupos_restritos.get(
+                ocorrencias[segundo]["element"]["icon_order_id"]
+            )
+            if (
+                grupo_restrito_primeiro != grupo_restrito_segundo
+                and (
+                    grupo_restrito_primeiro is not None
+                    or grupo_restrito_segundo is not None
+                )
+            ):
+                continue
+            if _assinaturas_equivalentes(
+                assinaturas[primeiro],
+                assinaturas[segundo],
+                bboxes[primeiro],
+                bboxes[segundo],
+            ):
+                uf.union(primeiro, segundo)
+
+    componentes: Dict[int, List[int]] = defaultdict(list)
+    for indice in range(len(ocorrencias)):
+        componentes[uf.find(indice)].append(indice)
+
+    catalogo: Dict[str, Dict[str, Any]] = {}
+    pixmaps_por_icon: Dict[str, List[Tuple[int, fitz.Pixmap]]] = defaultdict(list)
+
+    for indices in sorted(componentes.values(), key=min):
+        primeira = ocorrencias[indices[0]]
+        assinatura, cor = primeira["signature"]
+        icon_id = f"icon_{len(catalogo) + 1:04d}"
+        registro = {
+            "icon_id": icon_id,
+            "image_path": f"assets/icons/{icon_id}.png",
+            "phash": assinatura,
+            "dominant_color": cor,
+            "occurrences": [],
+        }
+        catalogo[icon_id] = registro
+        if BUSCAR_ICONES:
+            _adicionar_asset(primeira["pixmap"], diretorio_icons / f"{icon_id}.png")
+
+        for indice in indices:
+            ocorrencia = ocorrencias[indice]
+            icon_order_id = ocorrencia["element"]["icon_order_id"]
+            ocorrencia["element"]["icon_id"] = icon_id
+            pixmaps_por_icon[icon_id].append(
+                (icon_order_id, ocorrencia["pixmap"])
+            )
+            registro["occurrences"].append(
+                {
+                    "page": ocorrencia["page"],
+                    "icon_order_id": icon_order_id,
+                    "source_element_ids": ocorrencia["source_element_ids"],
+                }
+            )
     return catalogo, pixmaps_por_icon
 
 
