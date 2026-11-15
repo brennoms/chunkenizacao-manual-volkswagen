@@ -95,11 +95,76 @@ Cada título atualiza a pilha de contexto ativa, preenchendo o atributo `section
 Quando o último bloco textual de uma coluna ou página termina sem pontuação final (`.`, `!`, `?`, `:`) ou com palavra hifenizada, ele é fundido ao primeiro bloco textual compatível da coluna ou página seguinte, registrando o intervalo `[page_start, page_end]`.
 
 #### 4. Caixas de Alerta (`alert_box`) e Vínculo de Escopo
-- **Delimitação:** inicia em cabeçalhos destacados por retângulo colorido contendo `PERIGO`, `ATENÇÃO`, `CUIDADO` ou `NOTA` (associados ao seu `icon_id`), ou em blocos iniciados por ícones de nota informativa/ambiental. Absorve todos os parágrafos e itens de lista subsequentes (inclusive através de quebras de coluna ou página) até atingir a linha horizontal delimitadora de fechamento (`shape_type == "line"`).
-- **Vínculo de Referência (`alert_scope` e `refers_to_ids`):**
-  - `chapter_intro`: quando o alerta está situado sob o tópico `"Introdução ao tema"`, vinculando-se ao ID da seção principal.
-  - `local_topic`: quando situado no corpo de um procedimento específico, vinculando-se ao ID do subtítulo ou bloco de instruções imediatamente anterior.
-  - `cross_reference`: avisos do tipo `"Observe ⚠️ no início desse capítulo na página X"` geram vínculo explícito apontando para os IDs dos elementos `alert_box` localizados na página `X`.
+
+A caixa de alerta deve ser reconstruída como uma **unidade semântica única**. O cabeçalho, o texto explicativo, os itens de recomendação e os ícones pertencentes ao mesmo quadro precisam permanecer juntos. A identificação combina evidências visuais, textuais e de sequência de leitura, nesta ordem de prioridade.
+
+##### 4.1. Detecção de candidatos
+
+Um elemento inicia um candidato a alerta quando satisfaz pelo menos uma das condições abaixo:
+
+1. **Cabeçalho textual explícito:** texto contendo, no início ou em uma linha própria, `PERIGO`, `ATENÇÃO`, `CUIDADO`, `NOTA`, `AMBIENTAL` ou `INFO`.
+2. **Cabeçalho gráfico:** texto curto dentro de um retângulo (`shape_type == "rectangle"`) com preenchimento ou contorno visualmente destacado, especialmente quando acompanhado por ícone `standalone`.
+3. **Alerta iconográfico:** ícone `standalone` identificado no catálogo como símbolo de advertência, informação ou meio ambiente, próximo de um bloco textual e dentro de uma região visualmente delimitada.
+
+A presença isolada de uma palavra como “atenção” no meio de uma frase não é suficiente. O texto deve funcionar como rótulo/cabeçalho ou estar apoiado por evidência gráfica. Da mesma forma, um ícone de advertência isolado não deve criar automaticamente um alerta se não houver texto ou região associada.
+
+##### 4.2. Reconstrução da região física
+
+Para cada candidato, determinar primeiro a região geométrica do quadro na página:
+
+1. Associar o cabeçalho ao retângulo de destaque que o contém ou que apresenta sobreposição significativa com seu `bbox`.
+2. Procurar linhas horizontais e verticais (`shape_type == "line"`) próximas ao cabeçalho, considerando alinhamento dos extremos e tolerância geométrica pequena (por exemplo, 2 pt).
+3. Formar o contorno com as linhas que compartilham limites horizontais/verticais e encerram a área do conteúdo. Retângulos preenchidos podem representar apenas a faixa do cabeçalho; portanto, não devem ser tratados automaticamente como o contorno completo do alerta.
+4. Incluir no quadro todos os textos, listas e ícones cujos centros estejam dentro da região delimitada, ou cuja maior parte da área esteja dentro dela.
+5. Excluir elementos externos ao quadro, mesmo que estejam próximos ou na mesma faixa vertical.
+
+A linha horizontal inferior que fecha o quadro é a evidência preferencial de encerramento. Uma linha que pertence à grade de uma tabela não pode ser usada como fechamento: verificar se seus extremos correspondem aos limites laterais do quadro e se o conjunto de linhas forma um contorno coerente.
+
+##### 4.3. Agrupamento semântico e continuidade
+
+Depois da detecção geométrica, ordenar os elementos internos pela ordem local de leitura e agrupá-los em um único `alert_box`:
+
+- `lead_text`: texto explicativo inicial do alerta, excluindo o rótulo (`PERIGO`, `ATENÇÃO` etc.) quando este puder ser separado sem perda de informação.
+- `items`: recomendações, proibições e instruções pertencentes ao alerta. Itens com marcadores devem ser mantidos como itens individuais, sem serem fundidos ao parágrafo anterior.
+- `icon_id`: identificador do ícone associado ao cabeçalho, quando existir. Se houver mais de um ícone relevante, o principal fica em `icon_id` e os demais devem permanecer referenciados em `inline_icons` ou no conteúdo do item correspondente.
+- `source_element_ids`: união, sem duplicatas, dos IDs de todos os textos, ícones e formas usados para construir o alerta.
+- `page_start` e `page_end`: primeira e última página ocupadas pelo alerta.
+
+A continuidade entre colunas ou páginas só deve ocorrer quando houver evidência de que o quadro continua: contorno lateral aberto na borda da coluna/página, alinhamento de largura e posição com a continuação seguinte, continuidade textual ou repetição de estilo/ícone. Uma quebra de página, por si só, não prova continuidade. Se o quadro terminar visualmente na página atual, o alerta deve ser encerrado mesmo que o texto seguinte pareça relacionado.
+
+Quando não houver contorno completo, aplicar uma regra de fallback conservadora: agregar os blocos subsequentes apenas enquanto mantiverem proximidade espacial, sequência de leitura e continuidade sintática, interrompendo ao encontrar um novo título, novo alerta, tabela, imagem independente, mudança de coluna sem continuidade ou início de outro assunto. Marcar internamente o caso para homologação visual; não absorver texto de forma ilimitada.
+
+##### 4.4. Nível e escopo do alerta
+
+`alert_level` deve assumir um dos valores: `PERIGO`, `ATENÇÃO`, `CUIDADO`, `NOTA`, `AMBIENTAL` ou `INFO`. O nível é obtido do rótulo explícito; quando o alerta for apenas iconográfico, usar `INFO` somente se o catálogo identificar inequivocamente um símbolo informativo. Caso contrário, manter o candidato pendente de revisão em vez de inventar um nível.
+
+`alert_scope` descreve a relação contextual do alerta, não sua posição física:
+
+- `chapter_intro`: alerta apresentado sob o tópico de introdução de um tema/capítulo e aplicável ao conteúdo introdutório daquele tema. `refers_to_ids` aponta para o ID do título/introdução correspondente.
+- `local_topic`: alerta inserido no corpo de uma seção ou procedimento específico. `refers_to_ids` aponta para o título local ou instrução imediatamente pertinente, não apenas para o último bloco por proximidade.
+- `cross_reference`: elemento textual que manda consultar um alerta em outra página/capítulo. Esse texto **não cria uma segunda caixa de alerta**; seu `referenced_alerts` aponta para o(s) `alert_box` efetivamente identificado(s) no destino.
+
+Para decidir entre `chapter_intro` e `local_topic`, usar a hierarquia `section_path`, a posição do quadro em relação ao título e o conteúdo do alerta. Não inferir `chapter_intro` apenas porque o alerta está no início de uma página.
+
+##### 4.5. Referências cruzadas
+
+Detectar expressões como “Observe [ícone] no início deste capítulo na página X”, “ver aviso na página X” e equivalentes. Resolver a página mencionada contra os `alert_box` daquela página e selecionar o alerta compatível por nível, ícone, assunto e seção. Se houver mais de um candidato e não for possível desambiguar, registrar todos os candidatos plausíveis para revisão, sem escolher arbitrariamente.
+
+A referência é armazenada no campo `referenced_alerts` do texto que faz a chamada. O campo `refers_to_ids` do alerta é reservado ao vínculo contextual do próprio alerta, não à lista de textos que o mencionam.
+
+##### 4.6. Validação e casos ambíguos
+
+Todo alerta detectado deve passar por estas verificações:
+
+1. O cabeçalho e os itens estão no mesmo `alert_box`.
+2. Nenhum texto fora do contorno foi absorvido.
+3. A linha de fechamento pertence ao quadro, e não a uma tabela adjacente.
+4. A lista mantém a ordem e os marcadores originais.
+5. O ícone associado existe no `icons_catalog.json` e em `assets/icons/`.
+6. As referências cruzadas apontam para IDs existentes.
+7. A união de `source_element_ids` permite localizar todos os elementos originais que compõem o alerta.
+
+Casos sem limite geométrico claro, com possível continuação entre páginas ou com mais de um alerta candidato devem ser sinalizados no relatório de homologação visual. É preferível manter um alerta dividido/pendente para revisão do que fundir conteúdo de seções diferentes silenciosamente.
 
 #### 5. Reconstrução de Tabelas em Markdown (`table`)
 Gradeamento formado pela interseção de fios horizontais e verticais (`shape`). O conteúdo textual e os `icon_id`s (formatados como `<icon:icon_XXXX>`) contidos em cada célula `[linha, coluna]` são convertidos em sintaxe de tabela Markdown padronizada. Tabelas que continuam na coluna ou página seguinte com o mesmo cabeçalho são unificadas.
@@ -328,7 +393,7 @@ O arquivo `descricao_icons.json` deve seguir o formato:
 
 *Valores permitidos para `alert_level`:* `"PERIGO"`, `"ATENÇÃO"`, `"CUIDADO"`, `"NOTA"`, `"AMBIENTAL"`, `"INFO"`.
 
-*Valores permitidos para `alert_scope`:* `"chapter_intro"`, `"local_topic"`.
+*Valores permitidos para `alert_scope`:* `"chapter_intro"`, `"local_topic"`. O valor `"cross_reference"` é usado no texto que faz a chamada, não em uma caixa `alert_box`; nesse caso, o vínculo é registrado em `referenced_alerts` do elemento chamador.
 
 #### Tabela — `type: "table"`
 
@@ -385,4 +450,4 @@ O arquivo `descricao_icons.json` deve seguir o formato:
 2. **Ausência de Geometria na Saída:** nenhum registro de `document_preparado.jsonl` deve conter atributos `bbox`, `normalized_bbox`, `font`, `font_size`, `color` ou elementos puramente gráficos (`shape`/`vector`).
 3. **Rastreabilidade Completa:** todo registro preparado deve listar em `source_element_ids` os identificadores originais de `document.jsonl` que o compõem.
 4. **Resolução de Ícones:** todo `icon_id` citado em `inline_icons` ou em `alert_box` deve existir no arquivo `icons_catalog.json` e possuir imagem correspondente em `assets/icons/`.
-5. **Integridade de Alertas:** nenhuma caixa de alerta (`PERIGO`, `ATENÇÃO`, `CUIDADO`, `NOTA`) pode ter seus itens de recomendação (`•`) separados do cabeçalho do alerta, mesmo quando houver quebra de coluna ou de página.
+5. **Integridade de Alertas:** nenhuma caixa de alerta (`PERIGO`, `ATENÇÃO`, `CUIDADO`, `NOTA`, `AMBIENTAL`, `INFO`) pode ter seus itens de recomendação (`•`) separados do cabeçalho do alerta, mesmo quando houver quebra de coluna ou de página.
