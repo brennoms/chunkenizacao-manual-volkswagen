@@ -32,7 +32,8 @@ raiz = {
         "assets": {
             "path": _raiz / "dados_preparados" / "assets",
             "icons": _raiz / "dados_preparados" / "assets" / "icons",
-            "paridade": _raiz / "dados_preparados" / "assets" / "paridade"
+            "paridade": _raiz / "dados_preparados" / "assets" / "paridade",
+            "all_icons": _raiz / "dados_preparados" / "assets" / "all_icons",
         },
         "debug_visual": {
             "path": _raiz / "dados_preparados" / "debug_visual",
