@@ -100,33 +100,27 @@ def formatar_elemento_markdown(elemento: Dict[str, Any]) -> Optional[str]:
 
 
 def gerar_documentos_extraidos(
-    caminho_entrada: str | Path,
-    diretorio_base: str | Path = "chunks"
+    document_entrada: Path,
+    pdf_original_path: Path,
+    saida_pdf_original: Path,
+    saida_ocr: Path,
+    saida_texto_bruto: Path,
 ) -> Dict[str, Path]:
     """
     Lê o document_preparado.jsonl (da Fase 3) e gera em chunks/02_extracted/:
     1. chunks/02_extracted/manual_tecnico_volkswagen_ocr.jsonl
     2. chunks/02_extracted/manual_tecnico_volkswagen_texto_bruto.txt
     """
-    caminho_entrada = Path(caminho_entrada)
-    dir_extracted = Path(diretorio_base) / "02_extracted"
-    dir_extracted.mkdir(parents=True, exist_ok=True)
 
-    caminho_ocr = dir_extracted / "manual_tecnico_volkswagen_ocr.jsonl"
-    caminho_texto_bruto = dir_extracted / "manual_tecnico_volkswagen_texto_bruto.txt"
-
-    # Remove document_preparado.jsonl residual de 02_extracted/, caso exista de execuções antigas
-    caminho_antigo_prep = dir_extracted / "document_preparado.jsonl"
-    if caminho_antigo_prep.exists() and caminho_antigo_prep.resolve() != caminho_entrada.resolve():
-        caminho_antigo_prep.unlink()
-
-    # 1. Garantir que manual_tecnico_volkswagen_ocr.jsonl seja a cópia exata da saída da Fase 3
-    if caminho_entrada.resolve() != caminho_ocr.resolve():
-        shutil.copy2(caminho_entrada, caminho_ocr)
+    # 1. Garantir que manual_tecnico_volkswagen_ocr.jsonl seja a cópia exata da saída da Fase 3 e que uma cópia seja feita do arquivo PDF original
+    if document_entrada.resolve() != saida_ocr.resolve():
+        shutil.copy2(document_entrada, saida_ocr)
+    if pdf_original_path.resolve() != saida_pdf_original.resolve():
+        shutil.copy2(pdf_original_path, saida_pdf_original)
 
     # 2. Carregar registros a partir do manual_tecnico_volkswagen_ocr.jsonl para montar o texto_bruto.txt
     registros: List[Dict[str, Any]] = []
-    with open(caminho_ocr, "r", encoding="utf-8") as f:
+    with open(saida_ocr, "r", encoding="utf-8") as f:
         for num_linha, linha in enumerate(f, start=1):
             linha = linha.strip()
             if not linha:
@@ -165,23 +159,28 @@ def gerar_documentos_extraidos(
 
     # 5. Salvar manual_tecnico_volkswagen_texto_bruto.txt
     texto_final = "\n\n".join(blocos_texto_bruto) + "\n"
-    with open(caminho_texto_bruto, "w", encoding="utf-8") as f_txt:
+    with open(saida_texto_bruto, "w", encoding="utf-8") as f_txt:
         f_txt.write(texto_final)
 
     print("Processamento concluído com sucesso:")
     print(f" - Registros totais:    {len(registros)}")
     print(f" - Blocos renderizados: {total_renderizados}")
-    print(f" - Arquivo OCR JSONL:   {caminho_ocr}")
-    print(f" - Arquivo Texto Bruto: {caminho_texto_bruto}")
+    print(f" - Arquivo OCR JSONL:   {saida_ocr}")
+    print(f" - Arquivo Texto Bruto: {saida_texto_bruto}")
 
     return {
-        "ocr_jsonl": caminho_ocr,
-        "texto_bruto": caminho_texto_bruto,
+        "ocr_jsonl": saida_ocr,
+        "texto_bruto": saida_texto_bruto,
     }
 
 
 if __name__ == "__main__":
     from utils.caminhos import raiz
 
-    arquivo_entrada = raiz["dados_preparados"]["document_preparado"]
-    gerar_documentos_extraidos(arquivo_entrada, diretorio_base="chunks")
+    gerar_documentos_extraidos(
+        document_entrada = raiz["dados_preparados"]["document_preparado"],
+        pdf_original_path = raiz["dados_extraidos"]["pdf_original"],
+        saida_pdf_original = raiz["chunks"]["01_raw"]["pdf_original"],
+        saida_ocr = raiz["chunks"]["02_extracted"]["ocr"],
+        saida_texto_bruto = raiz["chunks"]["02_extracted"]["texto_bruto"],
+    )
