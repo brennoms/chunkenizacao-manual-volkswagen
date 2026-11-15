@@ -83,7 +83,8 @@ OUTPUT/
 ## Documentação
 
 Para acessar o relatório geral do projeto, consulte o documento:
-- [Relatório Final](docs/relatorios/relatorio_final.md)
+- [Relatório Final em Markdown](docs/relatorios/relatorio_final.md)
+- [Relatório Final em PDF](docs/relatorios/relatorio_final.pdf)
 
 para acessar a documentação mais detalhada das etapas do processamento, as decisões metodológicas adotadas estão documentadas na pasta `docs/`:
 
