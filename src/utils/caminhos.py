@@ -53,6 +53,7 @@ raiz = {
         },
         "02_extracted": {
             "path": _raiz / "chunks" / "02_extracted",
+            "document_preparado": _raiz / "chunks" / "02_extracted" / "document_preparado.jsonl",
             "ocr": _raiz / "chunks" / "02_extracted" / "manual_tecnico_volkswagen_ocr.jsonl",
             "texto_bruto": _raiz / "chunks" / "02_extracted" / "manual_tecnico_volkswagen_texto_bruto.txt",
         },
