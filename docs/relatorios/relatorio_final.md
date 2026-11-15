@@ -112,40 +112,41 @@ A qualidade da fragmentação depende diretamente do rigor da preparação (Fase
 
 ## 4. Etapa 3 — Organização dos Arquivos e Justificativa do Formato `.jsonl` vs. `.txt`
 
-### 4.1. Arquitetura de Diretórios e Nomenclatura
-
-O projeto foi organizado em uma estrutura de diretórios modular e progressiva que separa claramente a fonte primária imutável, os dados intermediários preparados/auditados e os artefatos finais de chunking:
+### 4.1. Arquitetura de Diretórios de Saída e Nomenclatura
 
 ```text
-projeto_base_conhecimento_vw/
-│
-├── conteudo_extraido/                             # Saída da Extração Bruta (Etapa 1A)
-│   ├── metadata.json                              # Metadados do PDF + Hash SHA-256
-│   ├── document.jsonl                             # 309 linhas (1 registro JSON por página)
-│   ├── assets/                                    # Imagens extraídas desduplicadas por hash
-│   └── debug_visual/                              # PDFs de auditoria geométrica da extração
+OUTPUT/
+|
+├── dados_extraidos/
+|   ├── manual_tecnico_volkswagen.pdf              # Cópia íntegra do manual original
+|   ├── manual_tecnico_volkswagen.pdf.sha256       # Hash SHA-256 do PDF original
+│   └── conteudo_extraido/                         # Saída da Extração Bruta (Etapa 1A)
+│       ├── metadata.json                                # Metadados do PDF + Hash SHA-256
+│       ├── document.jsonl                               # 309 linhas (1 registro JSON por página)
+│       ├── assets/                                      # Imagens extraídas desduplicadas por hash
+│       └── debug_visual/                                # PDFs de auditoria geométrica da extração
 │
 ├── dados_preparados/                              # Saída da Preparação Semântica (Etapa 1B)
-│   ├── document_fase1.jsonl                       # Após remoção de cabeçalhos/rodapés/ruídos
-│   ├── document_fase2.jsonl                       # Após consolidação e pHash de ícones
-│   ├── document_preparado.jsonl                   # 4.511 blocos semânticos ordenados
-│   ├── icons_catalog.json                         # Catálogo global de ícones e matriz de paridade
-│   ├── descricao_images.json                      # Descrições enriquecidas das figuras
-│   ├── descricao_icons.json                       # Descrições enriquecidas dos ícones
-│   ├── assets/icons/                              # Recortes PNG únicos por icon_id
-│   └── debug_visual/                              # PDFs de homologação das Fases 1, 2 e 3
+│   ├── document_fase1.jsonl                             # Após remoção de cabeçalhos/rodapés/ruídos
+│   ├── document_fase2.jsonl                             # Após consolidação e pHash de ícones
+│   ├── document_preparado.jsonl                         # 4.511 blocos semânticos ordenados
+│   ├── icons_catalog.json                               # Catálogo global de ícones e matriz de paridade
+│   ├── descricao_images.json                            # Descrições enriquecidas das figuras
+│   ├── descricao_icons.json                             # Descrições enriquecidas dos ícones
+│   ├── assets/icons/                                    # Recortes PNG únicos por icon_id
+│   └── debug_visual/                                    # PDFs de homologação das Fases 1, 2 e 3
 │
 └── chunks/                                        # Pipeline Final de Chunking (Etapas 2 e 3)
-    ├── 01_raw/
-    │   └── manual_tecnico_volkswagen.pdf          # Cópia íntegra do manual original
-    ├── 02_extracted/
-    │   ├── manual_tecnico_volkswagen_ocr.jsonl    # Base canônica de blocos semânticos (Fase 3)
-    │   └── manual_tecnico_volkswagen_texto_bruto.txt # Texto sequencial completo em Markdown
-    └── 03_chunks/
-        ├── chunks.jsonl                           # Corpus completo unificado (537 chunks)
-        ├── chunks_tecnicos.jsonl                  # Coleção principal técnica (514 chunks)
-        ├── chunks_indices.jsonl                   # Coleção de Sumário e Índice Remissivo (23 chunks)
-        └── manifest.json                          # Estatísticas globais e relatório de 10 validações
+   ├── 01_raw/
+   │   └── manual_tecnico_volkswagen.pdf                 # Cópia íntegra do manual original
+   ├── 02_extracted/
+   │   ├── manual_tecnico_volkswagen_ocr.jsonl           # Base canônica de blocos semânticos (Fase 3)
+   │   └── manual_tecnico_volkswagen_texto_bruto.txt     # Texto sequencial completo em Markdown
+   └── 03_chunks/
+      ├── chunks.jsonl                                   # Corpus completo unificado (537 chunks)
+      ├── chunks_tecnicos.jsonl                          # Coleção principal técnica (514 chunks)
+      ├── chunks_indices.jsonl                           # Coleção de Sumário e Índice Remissivo (23 chunks)
+      └── manifest.json                                  # Estatísticas globais e relatório de 10 validações
 ```
 
 Cada chunk recebe um identificador único, sequencial e determinístico no formato `vw_000001` até `vw_000537`, mantendo vínculo explícito com sua localização original por meio dos atributos `contexto_hierarquico`, `sistema`, `componente`, `pagina_inicio`, `pagina_fim`, `elementos_origem` (`blk_XXXXXX`) e `source_element_ids` (`el_XXXXXX`).
