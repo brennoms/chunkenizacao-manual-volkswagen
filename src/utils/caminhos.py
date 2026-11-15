@@ -1,5 +1,7 @@
 from pathlib import Path
 
+TEST = True
+
 _raiz = Path(__file__).parent.parent.parent
 
 raiz = {
@@ -65,6 +67,15 @@ raiz = {
     }
 
 }
+
+if TEST:
+    def incluir_test(diretorio: dict):
+        for key, c in diretorio.items():
+            if isinstance(c, dict):
+                incluir_test(c)
+            elif isinstance(c, Path):
+                diretorio[key] = _raiz / "test" / c.relative_to(_raiz)
+    incluir_test(raiz)
 
 def garantir_diretorios(diretorio: dict):
     for c in diretorio.values():
