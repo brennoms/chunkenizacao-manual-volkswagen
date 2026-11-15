@@ -1930,11 +1930,11 @@ def gerar_debug_fase3_pdf(
 def executar_fase3(
     jsonl_entrada: Path,
     jsonl_saida: Path,
-    arquivo_descr_images: Optional[Path] = None,
-    arquivo_descr_icons: Optional[Path] = None,
-    arquivo_catalogo_icons: Optional[Path] = None,
-    caminho_debug_pdf: Optional[Path] = None,
-    pdf_original: Optional[Path] = None,
+    arquivo_descr_images: Optional[Path],
+    arquivo_descr_icons: Optional[Path],
+    arquivo_catalogo_icons: Optional[Path],
+    caminho_debug_pdf: Optional[Path],
+    pdf_original: Optional[Path],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Counter]:
     """
     Executa a Fase 3 completa e grava `document_preparado.jsonl`.
@@ -1961,6 +1961,8 @@ if __name__ == "__main__":
     executar_fase3(
         jsonl_entrada = raiz["dados_preparados"]["document_fase2"],
         jsonl_saida = raiz["dados_preparados"]["document_preparado"],
+        arquivo_descr_images = raiz["descricoes_manuais"]["descricao_images"],
+        arquivo_descr_icons = raiz["descricoes_manuais"]["descricao_icones"],
         arquivo_catalogo_icons = raiz["dados_preparados"]["icons_catalog"],
         caminho_debug_pdf = raiz["dados_preparados"]["debug_visual"]["fase3_ordem_leitura"],
         pdf_original = raiz["dados_extraidos"]["pdf_original"],

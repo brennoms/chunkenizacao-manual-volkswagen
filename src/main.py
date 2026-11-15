@@ -6,7 +6,7 @@ from extracao.download_pdf import baixar_pdf_manual_tecnico
 from extracao.extracao_pdf import extrair_pdf_bruto
 from extracao.validar_extracao import validar_extracao
 
-print("===========================================================================")
+print("\n\n===========================================================================")
 print("Iniciando o processo de extração do PDF do manual técnico da Volkswagen...")
 print("===========================================================================")
 
@@ -33,7 +33,7 @@ from preparacao.fase1 import executar_fase1_completo
 from preparacao.fase2 import executar_fase2
 from preparacao.fase3 import executar_fase3
 
-print("===========================================================================")
+print("\n\n===========================================================================")
 print("Iniciando o processo de preparação do PDF do manual técnico da Volkswagen...")
 print("===========================================================================")
 
@@ -60,6 +60,8 @@ print("\nFase 3: Ordenação de leitura:")
 executar_fase3(
     jsonl_entrada = raiz["dados_preparados"]["document_fase2"],
     jsonl_saida = raiz["dados_preparados"]["document_preparado"],
+    arquivo_descr_images = raiz["descricoes_manuais"]["descricao_images"],
+    arquivo_descr_icons = raiz["descricoes_manuais"]["descricao_icones"],
     arquivo_catalogo_icons = raiz["dados_preparados"]["icons_catalog"],
     caminho_debug_pdf = raiz["dados_preparados"]["debug_visual"]["fase3_ordem_leitura"],
     pdf_original = raiz["dados_extraidos"]["pdf_original"],
@@ -70,7 +72,7 @@ executar_fase3(
 from chunkenizacao.gerar_ocr_e_texto_bruto import gerar_documentos_extraidos
 from chunkenizacao.gerar_chunks import gerar_chunks
 
-print("===========================================================================")
+print("\n\n===========================================================================")
 print("Iniciando o processo de chunkenização do PDF do manual técnico da Volkswagen...")
 print("===========================================================================")
 

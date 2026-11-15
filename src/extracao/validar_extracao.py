@@ -127,7 +127,7 @@ def _perguntar_tipos_elementos() -> Set[str]:
     tipos_validos = {"text", "image", "shape", "vector", "link"}
     while True:
         resposta = input(
-            "Quais tipos deseja observar? "
+            "Quais tipos deseja observar no debug visual? "
             "(text, image, shape, vector, link; separados por vírgula; "
             "Enter para todos): "
         ).strip().lower()
@@ -226,9 +226,9 @@ def validar_extracao(
     """
     from utils.caminhos import raiz
 
+    tipos_observados = _perguntar_tipos_elementos()
     ok = validar_regras_extracao(output_dir)
     if ok:
-        tipos_observados = _perguntar_tipos_elementos()
         gerar_debug_visual_pdf(
             pdf_path=pdf_path,
             output_dir=output_dir,
