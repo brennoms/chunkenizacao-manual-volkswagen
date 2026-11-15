@@ -1221,8 +1221,9 @@ if __name__ == "__main__":
     hash_atual = pdf_hash_path.read_text(encoding="utf-8").strip()
 
     print(f"Iniciando extração bruta de '{pdf_path.name}'...")
+
     extrair_pdf_bruto(
-        pdf_path=pdf_path,
-        output_dir=diretorio_saida,
-        file_sha256=hash_atual,
+        pdf_path = raiz["dados_extraidos"]["pdf_original"],
+        output_dir = raiz["dados_extraidos"]["conteudo_extraido"]["path"],
+        file_sha256 = raiz["dados_extraidos"]["pdf_original_hash"].read_text(encoding="utf-8").strip(),
     )

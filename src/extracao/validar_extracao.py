@@ -217,17 +217,29 @@ def gerar_debug_visual_pdf(
     return pdf_saida_path
 
 
-if __name__ == "__main__":
+def validar_extracao(
+        pdf_path: Path,
+        output_dir: Path,
+):
+    """
+    Função principal para validar a extração do PDF.
+    """
     from utils.caminhos import raiz
 
-    pdf_path = raiz["dados_extraidos"]["pdf_original"]
-    diretorio_saida = Path(raiz["dados_extraidos"]["conteudo_extraido"]["path"])
-
-    ok = validar_regras_extracao(diretorio_saida)
+    ok = validar_regras_extracao(output_dir)
     if ok:
         tipos_observados = _perguntar_tipos_elementos()
         gerar_debug_visual_pdf(
-            pdf_path=Path(pdf_path),
-            output_dir=diretorio_saida,
+            pdf_path=pdf_path,
+            output_dir=output_dir,
             tipos_observados=tipos_observados,
         )
+
+if __name__ == "__main__":
+    from utils.caminhos import raiz
+
+    validar_extracao(
+        pdf_path = raiz["dados_extraidos"]["pdf_original"], 
+        output_dir = raiz["dados_extraidos"]["conteudo_extraido"]["path"]
+    )
+    
