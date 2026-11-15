@@ -52,7 +52,7 @@ Após a execução, os arquivos gerados estarão disponíveis na pasta `OUTPUT/`
 ```text
 OUTPUT/
 │
-└── 03_chunks/
+└── 03_resultado/
     │
     ├── 01_raw/
     │   └── manual_tecnico_volkswagen.pdf

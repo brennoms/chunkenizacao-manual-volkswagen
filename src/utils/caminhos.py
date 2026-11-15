@@ -51,21 +51,21 @@ raiz = {
     },
 
     "chunks": {
-        "path": _raiz / "OUTPUT" / "03_chunks",
+        "path": _raiz / "OUTPUT" / "03_resultado",
         "01_raw": {
-            "path": _raiz / "OUTPUT" / "03_chunks" / "01_raw",
-            "pdf_original": _raiz / "OUTPUT" / "03_chunks" / "01_raw" / "manual_tecnico_volkswagen.pdf"
+            "path": _raiz / "OUTPUT" / "03_resultado" / "01_raw",
+            "pdf_original": _raiz / "OUTPUT" / "03_resultado" / "01_raw" / "manual_tecnico_volkswagen.pdf"
         },
         "02_extracted": {
-            "path": _raiz / "OUTPUT" / "03_chunks" / "02_extracted",
-            "document_preparado": _raiz / "OUTPUT" / "03_chunks" / "02_extracted" / "document_preparado.jsonl",
-            "ocr": _raiz / "OUTPUT" / "03_chunks" / "02_extracted" / "manual_tecnico_volkswagen_ocr.jsonl",
-            "texto_bruto": _raiz / "OUTPUT" / "03_chunks" / "02_extracted" / "manual_tecnico_volkswagen_texto_bruto.txt",
+            "path": _raiz / "OUTPUT" / "03_resultado" / "02_extracted",
+            "document_preparado": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "document_preparado.jsonl",
+            "ocr": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "manual_tecnico_volkswagen_ocr.jsonl",
+            "texto_bruto": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "manual_tecnico_volkswagen_texto_bruto.txt",
         },
         "03_chunks": {
-            "path": _raiz / "OUTPUT" / "03_chunks" / "03_chunks",
-            "chunks": _raiz / "OUTPUT" / "03_chunks" / "03_chunks" / "chunks.jsonl",
-            "manifest": _raiz / "OUTPUT" / "03_chunks" / "03_chunks" / "manifest.json"
+            "path": _raiz / "OUTPUT" / "03_resultado" / "03_chunks",
+            "chunks": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "chunks.jsonl",
+            "manifest": _raiz / "OUTPUT" / "03_resultado" / "03_chunks" / "manifest.json"
         }
     }
 
