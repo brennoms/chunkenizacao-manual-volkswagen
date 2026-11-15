@@ -302,50 +302,90 @@ def agrupar_componentes_celulas(cells: list[Cell]) -> list[list[Cell]]:
 
 
 def detectar_tabelas_pagina(p: dict) -> list[dict]:
+    """Detecta tabelas por células retangulares e por grades de linhas.
+
+    A Fase 2 frequentemente representa tabelas como segmentos de linha, sem
+    retângulos de célula. Os segmentos horizontais contíguos são unidos por
+    coordenada Y e agrupados por sobreposição horizontal entre linhas.
     """
-    Reconhece grades construídas por retângulos de células. Exige repetição
-    estrutural de linhas/colunas para não classificar caixas decorativas como tabela.
-    """
-    candidatas = []
+    candidatas: list[dict] = []
+
+    # 1) Grades de células retangulares (mantém compatibilidade com o método original).
     for grupo in agrupar_componentes_celulas(retangulos_celula(p)):
         if len(grupo) < 4:
             continue
-        xs = sorted({round(c.rect[0], 1) for c in grupo})
-        ys = sorted({round(c.rect[1], 1) for c in grupo})
-        if len(xs) < 2 or len(ys) < 2:
-            continue
-        # Uma tabela real tende a ocupar mais de uma linha e mais de uma coluna.
         x0 = min(c.rect[0] for c in grupo); y0 = min(c.rect[1] for c in grupo)
         x1 = max(c.rect[2] for c in grupo); y1 = max(c.rect[3] for c in grupo)
         if x1-x0 < 65 or y1-y0 < 35:
             continue
-        # Rejeita agrupamentos de retângulos sobrepostos que não formam células.
-        pares = 0
-        for a in grupo:
-            for b in grupo:
-                if a is b:
-                    continue
-                if abs(a.rect[0]-b.rect[0]) < TOL and abs(a.rect[2]-b.rect[2]) < TOL:
-                    pares += 1
-        if pares < 2:
-            continue
-        # Expande a grade para abranger colunas cujas células não possuem
-        # retângulos de fundo, mas compartilham as mesmas linhas horizontais.
-        for sh in p.get("elements", []):
-            if sh.get("type") != "shape" or sh.get("shape_type") != "line":
-                continue
-            sb = box(sh)
-            if sb[3]-sb[1] <= 1.5 and sb[2]-sb[0] >= 18 and y0-3 <= sb[1] <= y1+3:
-                if sb[0] <= x0+3 and sb[2] >= x1-3:
-                    x0, x1 = min(x0, sb[0]), max(x1, sb[2])
         candidatas.append({
             "bbox": (x0, y0, x1, y1),
             "cells": sorted(grupo, key=lambda c: (c.rect[1], c.rect[0])),
             "source_shape_ids": [c.source_id for c in grupo],
         })
-    # Remove duplicatas/contidos: mantém a grade mais abrangente.
+
+    # 2) Grade baseada em linhas. Agrupa segmentos horizontais na mesma altura.
+    linhas = []
+    for sh in p.get("elements", []):
+        if sh.get("type") != "shape" or sh.get("shape_type") != "line":
+            continue
+        x0, y0, x1, y1 = box(sh)
+        if abs(y1-y0) <= 1.5 and x1-x0 >= 10:
+            linhas.append(((y0+y1)/2, x0, x1, sh["id"]))
+
+    linhas.sort(key=lambda z: (z[0], z[1]))
+    por_y: list[list[tuple]] = []
+    for ln in linhas:
+        if not por_y or abs(ln[0] - sum(x[0] for x in por_y[-1])/len(por_y[-1])) > 2.2:
+            por_y.append([ln])
+        else:
+            por_y[-1].append(ln)
+
+    linhas_grade = []
+    for grupo_y in por_y:
+        segs = sorted([(x[1], x[2], x[3]) for x in grupo_y])
+        unidos = []
+        for a, b, sid in segs:
+            if unidos and a <= unidos[-1][1] + 3:
+                unidos[-1][1] = max(unidos[-1][1], b)
+                unidos[-1][2].append(sid)
+            else:
+                unidos.append([a, b, [sid]])
+        for a, b, ids in unidos:
+            if b-a >= 55:
+                linhas_grade.append({"y": sum(x[0] for x in grupo_y)/len(grupo_y),
+                                     "x0": a, "x1": b, "ids": ids})
+
+    grupos_grade: list[list[dict]] = []
+    for ln in sorted(linhas_grade, key=lambda z: z["y"]):
+        candidatos_grupo = []
+        for g in grupos_grade:
+            ultimo = g[-1]
+            inter = max(0, min(ln["x1"], ultimo["x1"]) - max(ln["x0"], ultimo["x0"]))
+            menor = max(1, min(ln["x1"]-ln["x0"], ultimo["x1"]-ultimo["x0"]))
+            if ln["y"] - ultimo["y"] <= 85 and inter/menor >= 0.55:
+                candidatos_grupo.append(g)
+        if candidatos_grupo:
+            g = max(candidatos_grupo, key=lambda z: max(0, min(ln["x1"], z[-1]["x1"])-max(ln["x0"], z[-1]["x0"])))
+            g.append(ln)
+        else:
+            grupos_grade.append([ln])
+
+    for g in grupos_grade:
+        ys = sorted({round(z["y"], 1) for z in g})
+        if len(ys) < 3:
+            continue
+        x0 = min(z["x0"] for z in g); x1 = max(z["x1"] for z in g)
+        y0, y1 = min(ys), max(ys)
+        if x1-x0 < 65 or y1-y0 < 30:
+            continue
+        ids = dedup(sid for z in g for sid in z["ids"])
+        candidatas.append({"bbox": (x0, y0, x1, y1), "cells": [],
+                           "source_shape_ids": ids})
+
     finais = []
-    for t in sorted(candidatas, key=lambda z: (z["bbox"][1], z["bbox"][0], -((z["bbox"][2]-z["bbox"][0])*(z["bbox"][3]-z["bbox"][1])))):
+    for t in sorted(candidatas, key=lambda z: (z["bbox"][1], z["bbox"][0],
+                         -((z["bbox"][2]-z["bbox"][0])*(z["bbox"][3]-z["bbox"][1])))):
         if any(contem(f["bbox"], t["bbox"], 3) for f in finais):
             continue
         finais.append(t)
@@ -373,9 +413,13 @@ def montar_markdown_tabela(tabela: dict, elementos: list[dict]) -> tuple[str, li
             if sy1 >= y0-3 and sy0 <= y1+3:
                 verticais.append((sx0+sx1)/2)
 
-    # Limites horizontais também podem estar registrados como bordas de retângulos.
-    for c in tabela["cells"]:
-        a, b, d, f = c.rect
+    # Limites também podem estar registrados como bordas de retângulos.
+    # A Fase 2 usa retângulos preenchidos para representar células sem linhas verticais.
+    rects = [c.rect for c in tabela.get("cells", [])]
+    rects.extend(box(sh) for sh in shapes
+                 if sh.get("shape_type") == "rectangle"
+                 and area_intersecao(box(sh), (x0-3, y0-3, x1+3, y1+3)) > 0)
+    for a, b, d, f in rects:
         if y0-3 <= b <= y1+3: horizontais.append(b)
         if y0-3 <= f <= y1+3: horizontais.append(f)
         if x0-3 <= a <= x1+3: verticais.append(a)
@@ -903,6 +947,7 @@ def vincular_alertas_referenciados(registros: list[dict]) -> None:
 
 def gerar_debug(pdf_original: Path, destino: Path, paginas: list[dict],
                 registros: list[dict]) -> None:
+    """Gera PDF de inspeção sem varrer todos os registros em cada página."""
     if fitz is None:
         print("AVISO: instale PyMuPDF (pip install pymupdf) para gerar o PDF de debug.")
         return
@@ -910,31 +955,38 @@ def gerar_debug(pdf_original: Path, destino: Path, paginas: list[dict],
         print("AVISO: PDF original não encontrado; debug visual ignorado.")
         return
 
-    doc = fitz.open(pdf_original)
-    por_id = {}
-    page_of = {}
+    # Índice de origem: elemento -> (página, caixa).
+    origem = {}
     for p in paginas:
+        page_num = int(p["page"])
         for e in p.get("elements", []):
-            por_id[e["id"]] = e
-            page_of[e["id"]] = int(p["page"])
+            origem[e["id"]] = (page_num, box(e))
 
-    for page_index, page in enumerate(doc, 1):
-        centers = []
-        for r in registros:
-            fontes = [por_id[s] for s in r.get("source_element_ids", [])
-                      if s in por_id and page_of.get(s) == page_index]
-            if not fontes:
-                continue
-            x0 = min(box(e)[0] for e in fontes); y0 = min(box(e)[1] for e in fontes)
-            x1 = max(box(e)[2] for e in fontes); y1 = max(box(e)[3] for e in fontes)
-            color = CORES_DEBUG.get(r["type"], (0,0,0))
-            rect = fitz.Rect(x0, y0, x1, y1)
-            page.draw_rect(rect, color=color, width=0.8, overlay=True)
-            page.insert_text((x0, max(7, y0-2)), f'#{r["reading_order"]}', fontsize=5, color=color, overlay=True)
-            centers.append((r["reading_order"], fitz.Point((x0+x1)/2, (y0+y1)/2)))
-        centers.sort(key=lambda z: z[0])
-        for (_, a), (_, b) in zip(centers, centers[1:]):
-            page.draw_line(a, b, color=(0.85, 0.1, 0.1), width=0.45, overlay=True)
+    # Agrega as caixas por registro e página antes de abrir/desenhar o PDF.
+    por_pagina = defaultdict(list)
+    for r in registros:
+        caixas = defaultdict(list)
+        for sid in r.get("source_element_ids", []):
+            item = origem.get(sid)
+            if item:
+                caixas[item[0]].append(item[1])
+        for page_num, bs in caixas.items():
+            rect = (min(x[0] for x in bs), min(x[1] for x in bs),
+                    max(x[2] for x in bs), max(x[3] for x in bs))
+            por_pagina[page_num].append((r["reading_order"], r["type"], rect))
+
+    doc = fitz.open(pdf_original)
+    for page_num, itens in por_pagina.items():
+        if not 1 <= page_num <= len(doc):
+            continue
+        page = doc[page_num-1]
+        for order, tipo, coords in itens:
+            x0, y0, x1, y1 = coords
+            color = CORES_DEBUG.get(tipo, (0, 0, 0))
+            page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=color,
+                           width=0.65, overlay=True)
+            page.insert_text((x0, max(7, y0-2)), f"#{order}", fontsize=5,
+                             color=color, overlay=True)
 
     destino.parent.mkdir(parents=True, exist_ok=True)
     doc.save(destino, garbage=4, deflate=True)
@@ -979,7 +1031,7 @@ def validar(registros: list[dict], catalogo: dict | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def executar(entrada: Path, saida: Path, pasta_dados: Path,
-             pdf_original: Path | None = None, debug: bool = True) -> list[dict]:
+             pdf_original: Path | None = None, debug: bool = False) -> list[dict]:
     paginas = ler_jsonl(entrada)
     descr_images = ler_json(pasta_dados / "descricao_images.json")
     descr_icones = ler_json(pasta_dados / "descricao_icones.json")
@@ -1023,9 +1075,9 @@ def main():
     parser.add_argument("--saida", type=Path, default=Path("dados_preparados/document_preparado.jsonl"))
     parser.add_argument("--dados", type=Path, default=Path("dados_preparados"))
     parser.add_argument("--pdf", type=Path, default=None)
-    parser.add_argument("--sem-debug", action="store_true")
+    parser.add_argument("--debug", action="store_true", help="Gera o PDF visual de depuração (operação opcional e mais lenta).")
     args = parser.parse_args()
-    executar(args.entrada, args.saida, args.dados, args.pdf, not args.sem_debug)
+    executar(args.entrada, args.saida, args.dados, args.pdf, args.debug)
 
 
 if __name__ == "__main__":
