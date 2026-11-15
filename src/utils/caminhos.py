@@ -22,6 +22,7 @@ raiz = {
             }
         },
     },
+
     "dados_preparados": {
         "path": _raiz / "dados_preparados",
         "document_fase1": _raiz / "dados_preparados" / "document_fase1.jsonl",
@@ -41,6 +42,24 @@ raiz = {
             "fase1_removidos": _raiz / "dados_preparados" / "debug_visual" / "debug_fase1_removidos.pdf",
             "fase2_icones": _raiz / "dados_preparados" / "debug_visual" / "debug_fase2_icones.pdf",
             "fase3_ordem_leitura": _raiz / "dados_preparados" / "debug_visual" / "debug_fase3_ordem_leitura.pdf"
+        }
+    },
+
+    "chunks": {
+        "path": _raiz / "chunks",
+        "01_raw": {
+            "path": _raiz / "chunks" / "01_raw",
+            "pdf_original": _raiz / "chunks" / "01_raw" / "manual_tecnico_volkswagen.pdf"
+        },
+        "02_extracted": {
+            "path": _raiz / "chunks" / "02_extracted",
+            "ocr": _raiz / "chunks" / "02_extracted" / "manual_tecnico_volkswagen_ocr.jsonl",
+            "texto_bruto": _raiz / "chunks" / "02_extracted" / "manual_tecnico_volkswagen_texto_bruto.txt",
+        },
+        "03_chunks": {
+            "path": _raiz / "chunks" / "03_chunks",
+            "chunks": _raiz / "chunks" / "03_chunks" / "chunks.jsonl",
+            "manifest": _raiz / "chunks" / "03_chunks" / "manifest.json"
         }
     }
 
