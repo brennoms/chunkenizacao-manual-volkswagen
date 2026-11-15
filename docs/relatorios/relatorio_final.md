@@ -1,7 +1,8 @@
-# Relatório Técnico — Construção de Base de Conhecimento a partir do Manual Técnico Volkswagen Nivus (AP2)
+# Relatório Técnico — Construção de Base de Conhecimento a partir do Manual Técnico Volkswagen Nivus
 
 **Disciplina:** Extração e Preparação de Dados  
 **Professor:** Alvaro Riz de Barros  
+**Aluno:** Brenno Marques Silva
 **Fonte de Dados:** Manual de Instruções Volkswagen Nivus (`21B.5B1.NIV.66`, 309 páginas)  
 
 ---
