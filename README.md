@@ -63,6 +63,8 @@ OUTPUT/
     │
     └── 03_chunks/
         ├── chunks.jsonl
+        ├── chunks_tecnicos.jsonl
+        ├── chunks_indices.jsonl
         └── manifest.json
 ```
 
@@ -73,7 +75,9 @@ OUTPUT/
 | `manual_tecnico_volkswagen.pdf` | Manual técnico original utilizado como entrada. |
 | `manual_tecnico_volkswagen_ocr.jsonl` | Conteúdo extraído do PDF, organizado em registros JSONL. |
 | `manual_tecnico_volkswagen_texto_bruto.txt` | Conteúdo textual extraído, em formato de texto simples. |
-| `chunks.jsonl` | Fragmentos textuais resultantes do processo de chunkenização, acompanhados de seus respectivos metadados. |
+| `chunks.jsonl` | corpus completo unificado contendo todos os 537 chunks gerados (`conteudo_tecnico` + `indices_navegacao`), incluindo os campos `text`, `embedding_text` e `metadata`. |
+| `chunks_tecnicos.jsonl` | Coleção filtrada exclusivamente com os chunks técnicos do manual (514 chunks, `colecao: "conteudo_tecnico"`), recomendada como índice principal de busca semântica. |
+| `chunks_indices.jsonl` | coleção dedicada aos chunks do Sumário (`Índice`) e do `Índice remissivo` (23 chunks, `colecao: "indices_navegacao"`), preservando a relação entre termos, assuntos e páginas sem poluir o ranking dos chunks técnicos. |
 | `manifest.json` | Arquivo de referência com informações e estatísticas sobre o processamento e os chunks gerados. |
 
 ## Documentação
