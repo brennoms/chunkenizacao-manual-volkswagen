@@ -20,7 +20,7 @@ LIMITE_HAMMING_PHASH = 5
 LIMITE_COR_ICONE = 15
 LIMITE_VARIACAO_ASPECTO = 0.03
 ESCALA_RENDERIZACAO_ICONE = 60.0
-BUSCAR_ICONES = False  # Defina como True para salvar as capturas dos ícones
+BUSCAR_ICONES = True  # Defina como True para salvar as capturas dos ícones
 
 COLUNAS_PARIDADE = 8
 TAMANHO_CELULA_PARIDADE = 96
@@ -46,7 +46,7 @@ ICONES_SEMELHANTES_MANUAIS: Dict[int, List[int]] = {
     26: [137, 650], 
     27: [641, 1046],
     66: [68, 76, 103, 688, 1677], # alerta laranja sem fundo
-    158: [161, 274, 346, 1160, 930],
+    158: [161, 274, 346, 1160],
     159: [1159],
     313: [356],
     342: [350],
