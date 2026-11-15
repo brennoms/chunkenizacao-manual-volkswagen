@@ -82,7 +82,10 @@ OUTPUT/
 
 ## Documentação
 
-As etapas do processamento e as decisões metodológicas adotadas estão documentadas na pasta `docs/`:
+Para acessar o relatório geral do projeto, consulte o documento:
+- [Relatório Final](docs/relatorios/relatorio_final.md)
+
+para acessar a documentação mais detalhada das etapas do processamento, as decisões metodológicas adotadas estão documentadas na pasta `docs/`:
 
 - [Metodologia de extração](docs/metodologia_extracao.md) — descreve o processo de extração de conteúdo do PDF.
 - [Metodologia de preparação](docs/metodologia_preparacao.md) — apresenta as etapas de tratamento, limpeza e organização do texto extraído.
