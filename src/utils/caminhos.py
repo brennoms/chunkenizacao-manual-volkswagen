@@ -58,7 +58,6 @@ raiz = {
         },
         "02_extracted": {
             "path": _raiz / "OUTPUT" / "03_resultado" / "02_extracted",
-            "document_preparado": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "document_preparado.jsonl",
             "ocr": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "manual_tecnico_volkswagen_ocr.jsonl",
             "texto_bruto": _raiz / "OUTPUT" / "03_resultado" / "02_extracted" / "manual_tecnico_volkswagen_texto_bruto.txt",
         },
