@@ -8,6 +8,8 @@ O processo envolve a extração do conteúdo do PDF, sua preparação e organiza
 
 ## Como executar
 
+⚠️ **Atenção:** O processo de extração e chunkenização do manual técnico é razoavelmente intensivo em termos de recursos computacionais, principalmente em termos de uso de memória RAM. Recomenda-se a execução sem outros processos exigentes em andamento.
+
 ### 1. Clone o repositório
 
 ```bash
